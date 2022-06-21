@@ -1,6 +1,5 @@
-project: rnshah9/slang
+project: slang
 target: slang
-tests: null
 
 cmds:
   - cmd: /repo/build/bin/slang @@
