@@ -2,4 +2,4 @@ project: slang
 target: slang
 
 cmds:
-  - cmd: /repo/build/bin/slang @@
+  - cmd: /install/bin/slang @@
