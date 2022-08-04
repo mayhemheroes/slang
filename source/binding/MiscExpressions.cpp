@@ -157,6 +157,14 @@ bool ValueExpressionBase::requireLValueImpl(const BindContext& context, SourceLo
             return false;
         }
     }
+    else if (symbol.kind == SymbolKind::ModportPort) {
+        if (symbol.as<ModportPortSymbol>().direction == ArgumentDirection::In) {
+            auto& diag = context.addDiag(diag::InputPortAssign, sourceRange);
+            diag << symbol.name;
+            diag.addNote(diag::NoteDeclarationHere, symbol.location);
+            return false;
+        }
+    }
 
     if (!longestStaticPrefix)
         longestStaticPrefix = this;
@@ -215,7 +223,6 @@ bool ValueExpressionBase::checkVariableAssignment(const BindContext& context,
     if (flags.has(AssignFlags::InOutPort))
         return reportErr(diag::InOutVarPortConn);
 
-    // TODO: modport assignability checks
     return true;
 }
 
@@ -484,7 +491,14 @@ ConstantValue LValueReferenceExpression::evalImpl(EvalContext& context) const {
 }
 
 Expression& ClockingEventExpression::fromSyntax(const ClockingPropertyExprSyntax& syntax,
-                                                const BindContext& context) {
+                                                const BindContext& argContext) {
+    // Clocking event expressions are only used in special system function calls,
+    // where they don't actually pass any time but instead tell the function which
+    // clock to use. We don't want usage inside of an always_comb to report an error
+    // about passing time, so clear out the context's procedure to avoid that.
+    BindContext context(argContext);
+    context.clearInstanceAndProc();
+
     auto& comp = context.getCompilation();
     auto& timing = TimingControl::bind(*syntax.event, context);
 
@@ -614,7 +628,7 @@ static bool checkAssertionArg(const PropertyExprSyntax& propExpr, const Assertio
             return false;
         }
 
-        sym->as<ValueSymbol>().addDriver(DriverKind::Procedural, bound, nullptr,
+        sym->as<ValueSymbol>().addDriver(DriverKind::Procedural, bound, context.scope->asSymbol(),
                                          AssignFlags::AssertionLocalVarFormalArg);
     }
 

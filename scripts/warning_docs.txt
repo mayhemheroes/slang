@@ -145,6 +145,18 @@ class C;
 endclass
 ```
 
+-Wempty-body
+An empty statement body for a loop or conditional statement could be confusing or misleading.
+If intended, move the semicolon to a separate line to suppress the warning.
+```
+module m;
+    initial begin
+        if (1); begin
+        end
+    end
+endmodule
+```
+
 -Wwarning-task
 A $warning elaboration task was encountered. Its message is printed by this diagnostic.
 ```
@@ -577,3 +589,15 @@ endmodule
 
 -Wnot-supported
 <ignored>
+
+-Wreversed-range
+An open range with constant bounds is reversed (i.e. has a larger left-hand side compared to its right).
+Such a range will behave as if it's empty and therefore never be selected.
+```
+class C;
+    rand bit [4:0] a;
+    constraint a_c {
+        a dist { 16 :/ 1, [15:1] :/ 1};
+    }
+endclass
+```

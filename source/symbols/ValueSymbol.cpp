@@ -48,7 +48,7 @@ bool ValueSymbol::isKind(SymbolKind kind) {
 
 ValueSymbol::Driver& ValueSymbol::Driver::create(EvalContext& evalContext, DriverKind kind,
                                                  const Expression& longestStaticPrefix,
-                                                 const Symbol* containingSymbol,
+                                                 const Symbol& containingSymbol,
                                                  bitmask<AssignFlags> flags, SourceRange range) {
     SmallVectorSized<const Expression*, 4> path;
     auto expr = &longestStaticPrefix;
@@ -56,6 +56,7 @@ ValueSymbol::Driver& ValueSymbol::Driver::create(EvalContext& evalContext, Drive
         switch (expr->kind) {
             case ExpressionKind::NamedValue:
             case ExpressionKind::HierarchicalValue:
+            case ExpressionKind::Call:
                 expr = nullptr;
                 break;
             case ExpressionKind::Conversion:
@@ -120,7 +121,7 @@ ValueSymbol::Driver& ValueSymbol::Driver::create(EvalContext& evalContext, Drive
 
 ValueSymbol::Driver& ValueSymbol::Driver::create(Compilation& comp, DriverKind kind,
                                                  span<const ConstantRange> longestStaticPrefix,
-                                                 const Symbol* containingSymbol,
+                                                 const Symbol& containingSymbol,
                                                  bitmask<AssignFlags> flags, SourceRange range,
                                                  SourceRange originalRange) {
     bool hasOriginalRange = originalRange.start() && originalRange.end();
@@ -148,16 +149,16 @@ ValueSymbol::Driver& ValueSymbol::Driver::create(Compilation& comp, DriverKind k
 }
 
 bool ValueSymbol::Driver::isInSingleDriverProcedure() const {
-    return containingSymbol && containingSymbol->kind == SymbolKind::ProceduralBlock &&
+    return containingSymbol->kind == SymbolKind::ProceduralBlock &&
            containingSymbol->as<ProceduralBlockSymbol>().isSingleDriverBlock();
 }
 
 bool ValueSymbol::Driver::isInSubroutine() const {
-    return containingSymbol && containingSymbol->kind == SymbolKind::Subroutine;
+    return containingSymbol->kind == SymbolKind::Subroutine;
 }
 
 bool ValueSymbol::Driver::isInInitialBlock() const {
-    return containingSymbol && containingSymbol->kind == SymbolKind::ProceduralBlock &&
+    return containingSymbol->kind == SymbolKind::ProceduralBlock &&
            containingSymbol->as<ProceduralBlockSymbol>().procedureKind ==
                ProceduralBlockKind::Initial;
 }
@@ -261,6 +262,26 @@ static bool handleOverlap(const Scope& scope, string_view name, const ValueSymbo
         return false;
     }
 
+    auto addAssignedHereNote = [&](Diagnostic& d) {
+        // If the two locations are the same, the symbol is driven by
+        // the same source location but two different parts of the hierarchy.
+        // In those cases we want a different note about what's going on.
+        if (currRange.start() != driverRange.start()) {
+            d.addNote(diag::NoteAssignedHere, currRange);
+        }
+        else {
+            auto& note = d.addNote(diag::NoteFromHere2, SourceLocation::NoLocation);
+
+            std::string buf;
+            driver.containingSymbol->getHierarchicalPath(buf);
+            note << buf;
+
+            buf.clear();
+            curr.containingSymbol->getHierarchicalPath(buf);
+            note << buf;
+        }
+    };
+
     if (curr.kind == DriverKind::Procedural && driver.kind == DriverKind::Procedural) {
         // Multiple procedural drivers where one of them is an
         // always_comb / always_ff block.
@@ -269,14 +290,13 @@ static bool handleOverlap(const Scope& scope, string_view name, const ValueSymbo
             procKind = driver.containingSymbol->as<ProceduralBlockSymbol>().procedureKind;
         }
         else {
-            ASSERT(curr.containingSymbol);
             procKind = curr.containingSymbol->as<ProceduralBlockSymbol>().procedureKind;
             std::swap(driverRange, currRange);
         }
 
         auto& diag = scope.addDiag(diag::MultipleAlwaysAssigns, driverRange);
         diag << name << SemanticFacts::getProcedureKindStr(procKind);
-        diag.addNote(diag::NoteAssignedHere, currRange);
+        addAssignedHereNote(diag);
 
         if (driver.flags.has(AssignFlags::SubFromProcedure) ||
             curr.flags.has(AssignFlags::SubFromProcedure)) {
@@ -307,12 +327,12 @@ static bool handleOverlap(const Scope& scope, string_view name, const ValueSymbo
         diag << netType->name;
     }
 
-    diag.addNote(diag::NoteAssignedHere, currRange);
+    addAssignedHereNote(diag);
     return false;
 }
 
 void ValueSymbol::addDriver(DriverKind driverKind, const Expression& longestStaticPrefix,
-                            const Symbol* containingSymbol, bitmask<AssignFlags> flags,
+                            const Symbol& containingSymbol, bitmask<AssignFlags> flags,
                             SourceRange rangeOverride, EvalContext* customEvalContext) const {
     auto scope = getParentScope();
     ASSERT(scope);
@@ -329,7 +349,7 @@ void ValueSymbol::addDriver(DriverKind driverKind, const Expression& longestStat
 }
 
 void ValueSymbol::addDriver(DriverKind driverKind, const Driver& copyFrom,
-                            const Symbol* containingSymbol, bitmask<AssignFlags> flags,
+                            const Symbol& containingSymbol, bitmask<AssignFlags> flags,
                             SourceRange rangeOverride) const {
     auto scope = getParentScope();
     ASSERT(scope);
@@ -346,7 +366,7 @@ void ValueSymbol::addDriverImpl(const Scope& scope, const Driver& driver) const 
         // The first time we add a driver, check whether there is also an
         // initializer expression that should count as a driver as well.
         auto create = [&](DriverKind driverKind) {
-            return &Driver::create(comp, driverKind, {}, nullptr, AssignFlags::None,
+            return &Driver::create(comp, driverKind, {}, scope.asSymbol(), AssignFlags::None,
                                    { location, location + name.length() }, {});
         };
 
@@ -401,6 +421,9 @@ void ValueSymbol::addDriverImpl(const Scope& scope, const Driver& driver) const 
         // - Don't check for "Other" drivers (procedural force / release, etc)
         // - Otherwise, if is this a static var or uwire net:
         //      - Check if a mix of continuous and procedural assignments
+        //      - Don't check if both drivers are sliced ports from an array
+        //        of instances. We already sliced these up correctly when the
+        //        connections were made and the overlap logic here won't work correctly.
         //      - Check if multiple continuous assignments
         //      - If both procedural, check that there aren't multiple
         //        always_comb / always_ff procedures.
@@ -415,12 +438,15 @@ void ValueSymbol::addDriverImpl(const Scope& scope, const Driver& driver) const 
         else if (checkOverlap && driver.kind != DriverKind::Other &&
                  curr->kind != DriverKind::Other) {
             if (driver.kind == DriverKind::Continuous || curr->kind == DriverKind::Continuous) {
-                shouldCheck = true;
+                if (!driver.flags.has(AssignFlags::SlicedPort) ||
+                    !curr->flags.has(AssignFlags::SlicedPort)) {
+                    shouldCheck = true;
+                }
             }
-            else if (curr->containingSymbol != driver.containingSymbol && curr->containingSymbol &&
-                     driver.containingSymbol &&
+            else if (curr->containingSymbol != driver.containingSymbol &&
+                     curr->containingSymbol->kind == SymbolKind::ProceduralBlock &&
+                     driver.containingSymbol->kind == SymbolKind::ProceduralBlock &&
                      (curr->isInSingleDriverProcedure() || driver.isInSingleDriverProcedure()) &&
-                     !curr->isInSubroutine() && !driver.isInSubroutine() &&
                      (!comp.getOptions().allowDupInitialDrivers ||
                       (!curr->isInInitialBlock() && !driver.isInInitialBlock()))) {
 

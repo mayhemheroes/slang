@@ -119,9 +119,16 @@ enum class AssignFlags {
     ClockVar = 1 << 6,
 
     /// The assignment is from an assertion instance's local variable formal argument.
-    AssertionLocalVarFormalArg = 1 << 7
+    AssertionLocalVarFormalArg = 1 << 7,
+
+    /// The assignment is for an output port that was sliced due to an array of instances
+    /// being connected to an array argument.
+    SlicedPort = 1 << 8,
+
+    /// The assignment is the connection between a modport port and a symbol within the interface.
+    ModportConn = 1 << 9
 };
-BITMASK(AssignFlags, AssertionLocalVarFormalArg)
+BITMASK(AssignFlags, ModportConn)
 
 class SemanticFacts {
 public:

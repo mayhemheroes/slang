@@ -25,6 +25,9 @@ class CompilationUnitSymbol;
 class Definition;
 class Expression;
 class GenericClassDefSymbol;
+class InterfacePortSymbol;
+class MethodPrototypeSymbol;
+class ModportSymbol;
 class PackageSymbol;
 class PrimitiveSymbol;
 class PortConnection;
@@ -285,6 +288,10 @@ public:
     std::tuple<const SyntaxNode*, SymbolIndex, bool*> findOutOfBlockDecl(
         const Scope& scope, string_view className, string_view declName) const;
 
+    /// Tracks the existence of an extern interface method implementation. These are later
+    /// elaborated by the compilation to hook up connections to their interface prototypes.
+    void addExternInterfaceMethod(const SubroutineSymbol& method);
+
     /// Notes that there is a default clocking block associated with the specified scope.
     void noteDefaultClocking(const Scope& scope, const Symbol& clocking, SourceRange range);
 
@@ -429,6 +436,9 @@ private:
     const RootSymbol& getRoot(bool skipDefParamResolution);
     void parseParamOverrides(flat_hash_map<string_view, const ConstantValue*>& results);
     void checkDPIMethods(span<const SubroutineSymbol* const> dpiImports);
+    void checkExternIfaceMethods(span<const MethodPrototypeSymbol* const> protos);
+    void checkModportExports(
+        span<const std::pair<const InterfacePortSymbol*, const ModportSymbol*>> modports);
     void resolveDefParams(size_t numDefParams);
 
     // Stored options object.
@@ -580,6 +590,9 @@ private:
     // exported from those packages.
     flat_hash_map<const PackageSymbol*, flat_hash_map<string_view, const Symbol*>>
         packageExportCandidateMap;
+
+    // A list of extern interface method implementations for later elaboration.
+    std::vector<const SubroutineSymbol*> externInterfaceMethods;
 
     // A map of scopes to default clocking blocks.
     flat_hash_map<const Scope*, const Symbol*> defaultClockingMap;

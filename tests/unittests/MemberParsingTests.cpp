@@ -1,5 +1,8 @@
 #include "Test.h"
 
+#include "slang/parsing/Parser.h"
+#include "slang/parsing/Preprocessor.h"
+
 TEST_CASE("Simple module") {
     auto& text = "module foo(); endmodule";
     const auto& module = parseModule(text);
@@ -588,7 +591,7 @@ endprimitive
     CHECK_DIAGNOSTICS_EMPTY;
 }
 
-TEST_CASE("specify block") {
+TEST_CASE("specify block parsing") {
     auto& text = R"(
 module m;
     specify
@@ -615,6 +618,25 @@ endmodule
 
     parseCompilationUnit(text);
     CHECK_DIAGNOSTICS_EMPTY;
+}
+
+TEST_CASE("specify block parsing errors") {
+    auto& text = R"(
+module m;
+    specify
+        $width(edge[0 1, 22, , 11] clr);
+    endspecify
+endmodule
+)";
+
+    parseCompilationUnit(text);
+
+    REQUIRE(diagnostics.size() == 5);
+    CHECK(diagnostics[0].code == diag::InvalidEdgeDescriptor);
+    CHECK(diagnostics[1].code == diag::ExpectedToken);
+    CHECK(diagnostics[2].code == diag::InvalidEdgeDescriptor);
+    CHECK(diagnostics[3].code == diag::ExpectedEdgeDescriptor);
+    CHECK(diagnostics[4].code == diag::InvalidEdgeDescriptor);
 }
 
 TEST_CASE("Invalid package decls") {
@@ -770,7 +792,7 @@ class cg_cls;
 	    coverpoint y;
 	    XYA: cross xy, a { }
 	endgroup
-	
+
 	covergroup cg;
 	    coverpoint a { bins x[] = {[0:10]}; }
 	    coverpoint b { bins y[] = {[0:20]}; }
@@ -827,7 +849,7 @@ module mod_m;
 	    }
 	endgroup
 	cg cg_inst = new(3);
-	
+
 	covergroup yy;
 	    cross a, b
 	    {
@@ -965,6 +987,38 @@ module memMod(interface a);
         avail = 0;
     endtask
 endmodule
+)";
+
+    parseCompilationUnit(text);
+    CHECK_DIAGNOSTICS_EMPTY;
+}
+
+TEST_CASE("Config declaration parsing") {
+    auto& text = R"(
+config cfgl;
+    design rtlLib.top;
+    instance top use #(.WIDTH(32));
+    instance top.a1 use #(.W(top.WIDTH));
+endconfig
+
+config cfg2;
+    localparam S = 24;
+    design rtlLib.top4;
+    instance top4.a1 use #(.W(top4.S));
+    instance top4.a2 use #(.W(S));
+endconfig
+
+config cfg3;
+    design rtlLib.top ;
+    default liblist aLib rtlLib;
+    cell m use gateLib.m ;
+endconfig
+
+config cfg6;
+    design rtlLib.top;
+    default liblist aLib rtlLib;
+    instance top.a2 use work.cfg5:config ;
+endconfig
 )";
 
     parseCompilationUnit(text);

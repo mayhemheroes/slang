@@ -10,6 +10,7 @@
 
 #include "slang/binding/AssertionExpr.h"
 #include "slang/binding/Expression.h"
+#include "slang/binding/MiscExpressions.h"
 #include "slang/binding/TimingControl.h"
 #include "slang/compilation/Compilation.h"
 #include "slang/compilation/Definition.h"
@@ -295,9 +296,10 @@ void InstanceSymbol::fromSyntax(Compilation& compilation,
             }
         }
         else {
-            if (!isUninstantiated)
+            if (!isUninstantiated) {
                 context.addDiag(diag::UnknownModule, syntax.type.range())
                     << syntax.type.valueText();
+            }
 
             UnknownModuleSymbol::fromSyntax(compilation, syntax, context, results, implicitNets);
         }
@@ -356,6 +358,42 @@ void InstanceSymbol::fromSyntax(Compilation& compilation,
             results.append(builder.create(*instanceSyntax));
         }
     }
+}
+
+void InstanceSymbol::fromFixupSyntax(Compilation& comp, const Definition& definition,
+                                     const DataDeclarationSyntax& syntax,
+                                     const BindContext& context,
+                                     SmallVector<const Symbol*>& results) {
+    auto missing = [&](TokenKind tk, SourceLocation loc) {
+        return Token::createMissing(comp, tk, loc);
+    };
+
+    // Fabricate a fake instantiation syntax to let us reuse all of the real logic
+    // for this fixup case.
+    SmallVectorSized<TokenOrSyntax, 4> instances;
+    for (auto decl : syntax.declarators) {
+        auto loc = decl->name.location();
+        if (!instances.empty())
+            instances.append(missing(TokenKind::Comma, loc));
+
+        loc = loc + decl->name.rawText().length();
+        context.addDiag(diag::InstanceMissingParens, loc) << definition.getKindString();
+
+        auto instName = comp.emplace<InstanceNameSyntax>(decl->name, decl->dimensions);
+        auto instance = comp.emplace<HierarchicalInstanceSyntax>(
+            instName, missing(TokenKind::OpenParenthesis, loc), span<TokenOrSyntax>(),
+            missing(TokenKind::CloseParenthesis, loc));
+
+        instances.append(instance);
+    }
+
+    auto instantiation = comp.emplace<HierarchyInstantiationSyntax>(
+        span<AttributeInstanceSyntax*>(), syntax.type->getFirstToken(), nullptr,
+        instances.copy(comp), syntax.semi);
+
+    SmallVectorSized<const Symbol*, 8> implicitNets;
+    fromSyntax(comp, *instantiation, context, results, implicitNets);
+    ASSERT(implicitNets.empty());
 }
 
 void InstanceSymbol::fromBindDirective(const Scope& scope, const BindDirectiveSyntax& syntax) {
@@ -748,6 +786,44 @@ void UnknownModuleSymbol::fromSyntax(Compilation& compilation,
                          implicitNets);
 }
 
+static const AssertionExpr* bindUnknownPortConn(const BindContext& context,
+                                                const PropertyExprSyntax& syntax) {
+    // We have to check for a simple reference to an interface instance or port here,
+    // since we don't know whether this is an interface port connection or even
+    // a normal connection with a virtual interface type.
+    const SyntaxNode* node = &syntax;
+    if (node->kind == SyntaxKind::SimplePropertyExpr) {
+        node = node->as<SimplePropertyExprSyntax>().expr;
+        if (node->kind == SyntaxKind::SimpleSequenceExpr) {
+            auto& simpSeq = node->as<SimpleSequenceExprSyntax>();
+            if (!simpSeq.repetition) {
+                const ExpressionSyntax* expr = simpSeq.expr;
+                while (expr->kind == SyntaxKind::ParenthesizedExpression)
+                    expr = expr->as<ParenthesizedExpressionSyntax>().expression;
+
+                if (NameSyntax::isKind(expr->kind)) {
+                    LookupResult result;
+                    Lookup::name(expr->as<NameSyntax>(), context, LookupFlags::None, result);
+                    if (result.found) {
+                        auto symbol = result.found;
+                        if (symbol->kind == SymbolKind::Modport ||
+                            symbol->kind == SymbolKind::InterfacePort ||
+                            symbol->kind == SymbolKind::Instance ||
+                            symbol->kind == SymbolKind::InstanceArray) {
+                            auto& comp = context.getCompilation();
+                            auto hre = comp.emplace<HierarchicalReferenceExpression>(
+                                *symbol, comp.getVoidType(), syntax.sourceRange());
+                            return comp.emplace<SimpleAssertionExpr>(*hre, std::nullopt);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return &AssertionExpr::bind(syntax, context);
+}
+
 span<const AssertionExpr* const> UnknownModuleSymbol::getPortConnections() const {
     if (!ports) {
         auto syntax = getSyntax();
@@ -763,14 +839,14 @@ span<const AssertionExpr* const> UnknownModuleSymbol::getPortConnections() const
             if (port->kind == SyntaxKind::OrderedPortConnection) {
                 names.append(""sv);
                 results.append(
-                    &AssertionExpr::bind(*port->as<OrderedPortConnectionSyntax>().expr, context));
+                    bindUnknownPortConn(context, *port->as<OrderedPortConnectionSyntax>().expr));
             }
             else if (port->kind == SyntaxKind::NamedPortConnection) {
                 auto& npc = port->as<NamedPortConnectionSyntax>();
                 names.append(npc.name.valueText());
 
                 if (auto ex = npc.expr)
-                    results.append(&AssertionExpr::bind(*ex, context));
+                    results.append(bindUnknownPortConn(context, *ex));
             }
         }
 

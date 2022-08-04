@@ -437,7 +437,7 @@ static const Expression* bindIteratorExpr(Compilation& compilation,
     iterVar = it;
 
     BindContext iterCtx = context;
-    it->nextIterator = std::exchange(iterCtx.firstIterator, it);
+    it->nextTemp = std::exchange(iterCtx.firstTempVar, it);
     iterCtx.flags &= ~BindFlags::StaticInitializer;
 
     return &Expression::bind(*withClause.args->expressions[0], iterCtx);
@@ -698,7 +698,8 @@ bool CallExpression::checkConstant(EvalContext& context, const SubroutineSymbol&
         return false;
     }
 
-    if (subroutine.flags.has(MethodFlags::NotConst)) {
+    if (subroutine.flags.has(MethodFlags::NotConst | MethodFlags::InterfaceExtern |
+                             MethodFlags::ModportExport | MethodFlags::ModportImport)) {
         context.addDiag(diag::ConstEvalSubroutineNotConstant, range) << subroutine.name;
         return false;
     }
@@ -826,7 +827,7 @@ public:
         auto driver = expr.symbol.getFirstDriver();
         while (driver) {
             if (driver->containingSymbol == &sub && !driver->hasError) {
-                expr.symbol.addDriver(DriverKind::Procedural, *driver, &procedure,
+                expr.symbol.addDriver(DriverKind::Procedural, *driver, procedure,
                                       AssignFlags::SubFromProcedure, range);
             }
 

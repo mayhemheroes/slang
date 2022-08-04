@@ -1,4 +1,6 @@
 #include "Test.h"
+#include <catch2/catch_approx.hpp>
+using Catch::Approx;
 
 #include "slang/compilation/ScriptSession.h"
 
@@ -2323,11 +2325,9 @@ TEST_CASE("foreach loop extended name eval") {
     session.eval(R"(
 function rt f;
     rt array;
-    initial begin
-        foreach (array[i]) begin
-            foreach (array[i][j]) begin
-                array[i][j] = (i + 1) * (j + 1);
-            end
+    foreach (array[i]) begin
+        foreach (array[i][j]) begin
+            array[i][j] = (i + 1) * (j + 1);
         end
     end
     return array;
@@ -2356,4 +2356,101 @@ endfunction
     auto cv = session.eval("f();");
     CHECK(cv.toString() == "3");
     NO_SESSION_ERRORS;
+}
+
+TEST_CASE("Pattern matching eval") {
+    ScriptSession session;
+    session.eval(R"(
+typedef union tagged {
+    struct {
+        bit [4:0] reg1, reg2, regd;
+    } Add;
+    union tagged {
+        bit [9:0] JmpU;
+        struct packed {
+            bit [1:0] cc;
+            bit [9:0] addr;
+        } JmpC;
+    } Jmp;
+    void Baz;
+} Instr;
+)");
+
+    session.eval(R"(
+function automatic int f1;
+    Instr e = tagged Jmp tagged JmpC '{2, 137};
+    int rf[3] = '{0, 0, 1};
+
+    if (e matches (tagged Jmp (tagged JmpC '{cc:.c,addr:.a}))
+        &&& (rf[c] != 0))
+        return c + a;
+    else
+        return 1;
+endfunction
+)");
+
+    session.eval(R"(
+function automatic int f2;
+    Instr e = tagged Jmp tagged JmpC '{2, 137};
+    int rf[3] = '{0, 0, 1};
+    int i = 1;
+    struct { int a; real b; } asdf = '{1, 3.14};
+
+    unique case (e) matches
+        tagged Add: return 99;
+    endcase
+
+    case (e) matches
+        tagged Jmp: i++;
+    endcase
+
+    case (e) matches
+        tagged Add: return 100;
+        default: i += 9;
+    endcase
+
+    unique case (e) matches
+        tagged Jmp tagged JmpC '{.*, .*}: begin end
+        tagged Jmp tagged JmpC '{.*, .*}: begin end
+    endcase
+
+    case (asdf) matches
+        '{1.1, 3}: i++;
+        '{1, 3.14}: i += 3;
+    endcase
+
+    casex (asdf) matches
+        '{32'bx, 3.14}: i += 9;
+    endcase
+
+    casez (asdf) matches
+        '{32'b?, 3.14}: i += 7;
+    endcase
+
+    case (e) matches
+        tagged Add '{reg1:0}: return 2;
+        tagged Jmp tagged JmpC '{2, 0}: return 3;
+        tagged Jmp tagged JmpC '{.a, 137} &&& rf[0] > 0: return 4;
+        tagged Jmp tagged JmpC '{.a, .b} &&& rf[2] == 1: return a + b + i;
+        default: return 0;
+    endcase
+endfunction
+)");
+
+    session.eval(R"(
+function automatic int f3;
+    Instr e = tagged Jmp tagged JmpC '{2, 137};
+    int rf[3] = '{0, 0, 1};
+    return e matches (tagged Jmp (tagged JmpC '{cc:.c,addr:.a})) &&& rf[c] != 0 ? c + a : 1;
+endfunction
+)");
+
+    CHECK(session.eval("f1();").toString() == "139");
+    CHECK(session.eval("f2();").toString() == "169");
+    CHECK(session.eval("f3();").toString() == "139");
+
+    auto diags = session.getDiagnostics();
+    REQUIRE(diags.size() == 2);
+    CHECK(diags[0].code == diag::ConstEvalNoCaseItemsMatched);
+    CHECK(diags[1].code == diag::ConstEvalCaseItemsNotUnique);
 }

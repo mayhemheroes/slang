@@ -6,13 +6,13 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <flat_hash_map.hpp>
 #include <memory>
 #include <string>
 #include <typeindex>
 #include <typeinfo>
 
 #include "slang/diagnostics/Diagnostics.h"
+#include "slang/util/Hash.h"
 
 namespace slang {
 
@@ -132,10 +132,6 @@ public:
 
     /// Finds the diagnostic group with the given name, if it exists. Otherwise returns nullptr.
     const DiagGroup* findDiagGroup(string_view name) const;
-
-    /// Returns true if the given diagnostic has a custom severity mapping specified
-    /// by a previous call to setSeverity(). Otherwise returns false.
-    bool hasCustomSeverity(DiagCode code) const;
 
     /// Clears out all custom mappings for diagnostics, reverting built-ins back to
     /// their defaults and removing all user-specified diagnostics.

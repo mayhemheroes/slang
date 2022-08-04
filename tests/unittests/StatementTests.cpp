@@ -1,5 +1,13 @@
 #include "Test.h"
 
+#include "slang/symbols/BlockSymbols.h"
+#include "slang/symbols/CompilationUnitSymbols.h"
+#include "slang/symbols/InstanceSymbols.h"
+#include "slang/symbols/MemberSymbols.h"
+#include "slang/symbols/ParameterSymbols.h"
+#include "slang/symbols/VariableSymbols.h"
+#include "slang/types/Type.h"
+
 TEST_CASE("For loop statements") {
     auto tree = SyntaxTree::fromText(R"(
 module m;
@@ -58,7 +66,7 @@ module m #(
     always_comb begin
         foreach(VEC[i]) begin
             automatic int v = VEC[i];
-            
+
             $display(i);
         end
     end
@@ -335,8 +343,14 @@ endmodule
     Compilation compilation;
     compilation.addSyntaxTree(tree);
 
-    auto& block = compilation.getRoot().lookupName<StatementBlockSymbol>("m.block");
-    auto& cs = block.getBody().as<CaseStatement>();
+    auto& cs = compilation.getRoot()
+                   .topInstances[0]
+                   ->body.membersOfType<ProceduralBlockSymbol>()
+                   .begin()
+                   ->getBody()
+                   .as<BlockStatement>()
+                   .body.as<CaseStatement>();
+
     CHECK(cs.expr.type->toString() == "logic[8:0]");
 
     auto& diags = compilation.getAllDiagnostics();
@@ -593,19 +607,20 @@ endmodule
 TEST_CASE("If statement -- unevaluated branches -- invalid") {
     auto tree = SyntaxTree::fromText(R"(
 module m;
-
     localparam int n = -1;
     localparam logic[1:0] foo = '0;
 
     int j;
+    int baz[];
     initial begin
         if (n >= 0) begin
             j = foo[n];
         end else begin
             j = foo[n];
         end
-    end
 
+        if (baz) begin end
+    end
 endmodule
 )");
 
@@ -613,8 +628,9 @@ endmodule
     compilation.addSyntaxTree(tree);
 
     auto& diags = compilation.getAllDiagnostics();
-    REQUIRE(diags.size() == 1);
+    REQUIRE(diags.size() == 2);
     CHECK(diags[0].code == diag::IndexValueInvalid);
+    CHECK(diags[1].code == diag::NotBooleanConvertible);
 }
 
 TEST_CASE("Nonblocking assignment statement") {
@@ -765,7 +781,7 @@ module m;
         automatic int i = 0;
         fork : asdf
             i += 2;
-        join
+        join_none
         return i;
     endfunction
 
@@ -777,9 +793,8 @@ endmodule
     compilation.addSyntaxTree(tree);
 
     auto& diags = compilation.getAllDiagnostics();
-    REQUIRE(diags.size() == 2);
+    REQUIRE(diags.size() == 1);
     CHECK(diags[0].code == diag::ConstEvalParallelBlockNotConst);
-    CHECK(diags[1].code == diag::TimingInFuncNotAllowed);
 }
 
 TEST_CASE("Statement blocks -- decl after statements") {
@@ -1309,7 +1324,7 @@ module m;
 
     int j;
     assign j = 1;
-    
+
     clocking cb2 @clk;
         output j;
     endclocking
@@ -1354,7 +1369,7 @@ module m;
     int foo[];
     initial begin
         byte a, b, x;
-        randcase 
+        randcase
             a + b : x = 1;
             a - b : x = 2;
             a ^ ~b : x = 3;
@@ -1386,7 +1401,7 @@ module m;
             second : pop | push ;
             done : { $display("done"); return; } ;
             add(string s) : { $display(s); } ;
-            dec : { $display("dec"); break; } ;
+            dec : { begin : foo $display("dec"); break; end } ;
             pop : repeat($urandom_range( 2, 6 )) push;
             push : if (1) done else pop | rand join (0.5) first second done;
             baz : case (a & 7) 1, 2: push; 3: pop; default done; endcase;
@@ -1408,10 +1423,10 @@ module m;
 
         randsequence( A )
             void A : A1 A2;
-            void A1 : { cnt = 1; } B repeat(5) C B 
+            void A1 : { cnt = 1; } B repeat(5) C B
             { $display("c=%d, b1=%d, b2=%d", C, B[1], B[2]); }
             ;
-            void A2 : if (a) D(5) else D(20) 
+            void A2 : if (a) D(5) else D(20)
             { $display("d1=%d, d2=%d", D[1], D[2]); }
             ;
             int B : C { return C;}
@@ -1616,4 +1631,278 @@ endmodule
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 1);
     CHECK(diags[0].code == diag::MultipleAlwaysAssigns);
+}
+
+TEST_CASE("foreach shadowed variable regression") {
+    auto tree = SyntaxTree::fromText(R"(
+class C #(parameter type foo_t);
+    foo_t arr[];
+
+    function void baz;
+        foreach (arr[i]) begin
+            for (int i = 0; i < 10; i++) begin
+                if (i == 4)
+                    break;
+            end
+        end
+    endfunction
+endclass
+
+module m;
+    C #(int) c;
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Empty body warnings") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    bit done = 0;
+    int arr[];
+    initial begin
+        if (1);
+        if (1); else;
+
+        for (int i = 0; i < 10; i++); begin end
+
+        repeat (1);
+        forever;
+
+        while (done == 0);
+        begin
+            done = 1;
+        end
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 6);
+    CHECK(diags[0].code == diag::EmptyBody);
+    CHECK(diags[1].code == diag::EmptyBody);
+    CHECK(diags[2].code == diag::EmptyBody);
+    CHECK(diags[3].code == diag::EmptyBody);
+    CHECK(diags[4].code == diag::EmptyBody);
+    CHECK(diags[5].code == diag::EmptyBody);
+}
+
+TEST_CASE("Conditional statement / expression pattern matching") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    localparam int foo = 2;
+    int e, j;
+    initial begin
+        if (e matches foo &&& j > 0 &&& e matches .* &&& e matches .baz &&& baz > 2) begin
+            j = baz;
+        end
+        else begin
+            // Can't reference pattern var here.
+            j = baz;
+        end
+    end
+
+    typedef union tagged {
+        struct {
+            bit [4:0] reg1, reg2, regd;
+        } Add;
+        union tagged {
+            bit [9:0] JmpU;
+            struct {
+                bit [1:0] cc;
+                bit [9:0] addr;
+            } JmpC;
+        } Jmp;
+    } Instr;
+
+    Instr instr;
+    initial begin
+        if (instr matches (tagged Jmp (tagged JmpC '{cc:.c,addr:.a}))) begin
+            j = c + a;
+        end
+
+        if (instr matches (tagged Jmp .j) &&&
+            j matches (tagged JmpC '{cc:.c,addr:.a})) begin
+            e = c + a;
+        end
+    end
+
+    initial begin
+        e = instr matches tagged Jmp tagged JmpC '{cc:.c,addr:.a} &&& foo > 1 ? a + c : 0;
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::UndeclaredIdentifier);
+}
+
+TEST_CASE("Case statement pattern matching") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    typedef union tagged {
+        void Invalid;
+        int Valid;
+    } VInt;
+
+    VInt v;
+    initial begin
+        case (v) matches
+            tagged Invalid : $display ("v is Invalid");
+            tagged Valid .n : $display ("v is Valid with value %d", n);
+        endcase
+    end
+
+    typedef union tagged {
+        struct {
+            bit [4:0] reg1, reg2, regd;
+        } Add;
+        union tagged {
+            bit [9:0] JmpU;
+            struct {
+                bit [1:0] cc;
+                bit [9:0] addr;
+            } JmpC;
+        } Jmp;
+    } Instr;
+
+    int rf[];
+    bit [9:0] pc;
+
+    Instr instr;
+    initial begin
+        case (instr) matches
+            tagged Add '{.r1, .r2, .rd} &&& (rd != 0) : rf[rd] = rf[r1] + rf[r2];
+            tagged Jmp .j : case (j) matches
+                                tagged JmpU .a : pc = pc + a;
+                                tagged JmpC '{.c, .a}: if (rf[c]) pc = a;
+                            endcase
+        endcase
+
+        case (instr) matches
+            tagged Add '{.*, .*, 0} : ; // no op
+            tagged Add '{.r1, .r2, .rd} : rf[rd] = rf[r1] + rf[r2];
+            tagged Jmp .j : case (j) matches
+                                tagged JmpU .a : pc = pc + a;
+                                tagged JmpC '{.c, .a} : if (rf[c]) pc = a;
+                            endcase
+        endcase
+
+        case (instr) matches
+            tagged Add .s: case (s) matches
+                                '{.*, .*, 0} : ; // no op
+                                '{.r1, .r2, .rd} : rf[rd] = rf[r1] + rf[r2];
+                          endcase
+            tagged Jmp .j: case (j) matches
+                                tagged JmpU .a : pc = pc + a;
+                                tagged JmpC '{.c, .a} : if (rf[c]) pc = a;
+                                default: begin end
+                           endcase
+        endcase
+
+        case (instr) matches
+            tagged Add '{.r1, .r2, .rd} &&& (rd != 0) : rf[rd] = rf[r1] + rf[r2];
+            tagged Jmp (tagged JmpU .a) : pc = pc + a;
+            tagged Jmp (tagged JmpC '{.c, .a}) : if (rf[c]) pc = a;
+        endcase
+
+        case (instr) matches
+            tagged Add '{reg2:.r2,regd:.rd,reg1:.r1} &&& (rd != 0):
+                                                        rf[rd] = rf[r1] + rf[r2];
+            tagged Jmp (tagged JmpU .a) : pc = pc + a;
+            tagged Jmp (tagged JmpC '{addr:.a,cc:.c}) : if (rf[c]) pc = a;
+        endcase
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Pattern case statement invalid filter") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    int foo;
+    int bar[];
+    initial begin
+        case (foo) matches
+            .* &&& bar: begin end
+        endcase
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::NotBooleanConvertible);
+}
+
+TEST_CASE("Pattern matching -- fallback variable creation") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    int bar;
+    initial begin
+        if (foo matches '{.a, tagged Jmp .b}) begin
+            bar = a + b;
+        end
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::UndeclaredIdentifier);
+}
+
+TEST_CASE("Pattern matching error cases") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    struct { int a, b; } asdf;
+    union tagged { int a; real b; } baz;
+    initial begin
+        if (asdf matches '{.c, .c}) begin end
+        if (asdf matches tagged Foo) begin end
+        if (baz matches tagged c) begin end
+        if (baz matches tagged a tagged Foo) begin end
+        if (baz matches '{.a, .b}) begin end
+        if (asdf matches '{.a, .b, .c}) begin end
+        if (asdf matches '{.a}) begin end
+        if (asdf matches '{c: .*}) begin end
+        if (asdf matches '{a: tagged Foo}) begin end
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 9);
+    CHECK(diags[0].code == diag::Redefinition);
+    CHECK(diags[1].code == diag::PatternTaggedType);
+    CHECK(diags[2].code == diag::UnknownMember);
+    CHECK(diags[3].code == diag::PatternTaggedType);
+    CHECK(diags[4].code == diag::PatternStructType);
+    CHECK(diags[5].code == diag::PatternStructTooMany);
+    CHECK(diags[6].code == diag::PatternStructTooFew);
+    CHECK(diags[7].code == diag::UnknownMember);
+    CHECK(diags[8].code == diag::PatternTaggedType);
 }

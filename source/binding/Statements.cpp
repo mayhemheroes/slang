@@ -56,14 +56,44 @@ ER Statement::eval(EvalContext& context) const {
     return visit(visitor, context);
 }
 
-BlockStatement* Statement::StatementContext::tryGetBlock(Compilation& compilation,
-                                                         const SyntaxNode& node) {
-    if (!blocks.empty() && blocks[0]->getSyntax() == &node) {
-        auto result = compilation.emplace<BlockStatement>(*blocks[0], node.sourceRange());
+Statement::StatementContext::~StatementContext() {
+    if (!lastEventControl.start()) {
+        auto proc = rootBindContext.getProceduralBlock();
+        if (proc && proc->procedureKind == ProceduralBlockKind::AlwaysFF && !proc->getBody().bad())
+            rootBindContext.addDiag(diag::AlwaysFFEventControl, proc->location);
+    }
+}
+
+const Statement* Statement::StatementContext::tryGetBlock(const BindContext& context,
+                                                          const SyntaxNode& target) {
+    if (!blocks.empty() && blocks[0]->getSyntax() == &target) {
+        auto& result = blocks[0]->getStatement(context, *this);
         blocks = blocks.subspan(1);
-        return result;
+        return &result;
     }
     return nullptr;
+}
+
+void Statement::StatementContext::observeTiming(const TimingControl& timing) {
+    auto proc = rootBindContext.getProceduralBlock();
+    if (!proc || proc->procedureKind != ProceduralBlockKind::AlwaysFF || timing.bad())
+        return;
+
+    if (timing.kind != TimingControlKind::SignalEvent &&
+        timing.kind != TimingControlKind::EventList &&
+        timing.kind != TimingControlKind::ImplicitEvent) {
+        rootBindContext.addDiag(diag::BlockingInAlwaysFF, timing.sourceRange);
+        return;
+    }
+
+    if (lastEventControl.start() && !flags.has(StatementFlags::HasTimingError)) {
+        auto& diag = rootBindContext.addDiag(diag::AlwaysFFEventControl, timing.sourceRange);
+        diag.addNote(diag::NotePreviousUsage, lastEventControl);
+
+        flags |= StatementFlags::HasTimingError;
+    }
+
+    lastEventControl = timing.sourceRange;
 }
 
 static bool hasSimpleLabel(const StatementSyntax& syntax) {
@@ -80,17 +110,14 @@ static bool hasSimpleLabel(const StatementSyntax& syntax) {
 const Statement& Statement::bind(const StatementSyntax& syntax, const BindContext& context,
                                  StatementContext& stmtCtx, bool inList, bool labelHandled) {
     auto& comp = context.getCompilation();
-    Statement* result;
 
     if (!labelHandled && hasSimpleLabel(syntax)) {
-        result = stmtCtx.tryGetBlock(comp, syntax);
-        ASSERT(result);
-
-        result->syntax = &syntax;
-        context.setAttributes(*result, syntax.attributes);
-        return *result;
+        auto block = stmtCtx.tryGetBlock(context, syntax);
+        ASSERT(block);
+        return *block;
     }
 
+    Statement* result;
     switch (syntax.kind) {
         case SyntaxKind::EmptyStatement:
             result = comp.emplace<EmptyStatement>(syntax.sourceRange());
@@ -123,11 +150,11 @@ const Statement& Statement::bind(const StatementSyntax& syntax, const BindContex
             break;
         case SyntaxKind::ForLoopStatement:
             // We might have an implicit block here; check for that first.
-            result = stmtCtx.tryGetBlock(comp, syntax);
-            if (!result) {
-                result = &ForLoopStatement::fromSyntax(comp, syntax.as<ForLoopStatementSyntax>(),
-                                                       context, stmtCtx);
-            }
+            if (auto block = stmtCtx.tryGetBlock(context, syntax))
+                return *block;
+
+            result = &ForLoopStatement::fromSyntax(comp, syntax.as<ForLoopStatementSyntax>(),
+                                                   context, stmtCtx);
             break;
         case SyntaxKind::LoopStatement: {
             auto& loop = syntax.as<LoopStatementSyntax>();
@@ -139,11 +166,11 @@ const Statement& Statement::bind(const StatementSyntax& syntax, const BindContex
         }
         case SyntaxKind::ForeachLoopStatement:
             // We might have an implicit block here; check for that first.
-            result = stmtCtx.tryGetBlock(comp, syntax);
-            if (!result) {
-                result = &ForeachLoopStatement::fromSyntax(
-                    comp, syntax.as<ForeachLoopStatementSyntax>(), context, stmtCtx);
-            }
+            if (auto block = stmtCtx.tryGetBlock(context, syntax))
+                return *block;
+
+            result = &ForeachLoopStatement::fromSyntax(
+                comp, syntax.as<ForeachLoopStatementSyntax>(), context, stmtCtx);
             break;
         case SyntaxKind::DoWhileStatement:
             result = &DoWhileLoopStatement::fromSyntax(comp, syntax.as<DoWhileStatementSyntax>(),
@@ -166,11 +193,11 @@ const Statement& Statement::bind(const StatementSyntax& syntax, const BindContex
             // A block statement may or may not match up with a hierarchy node. Handle both cases
             // here. We traverse statements in the same order as the findBlocks call below, so this
             // should always sync up exactly.
-            result = stmtCtx.tryGetBlock(comp, syntax);
-            if (!result) {
-                result = &BlockStatement::fromSyntax(comp, syntax.as<BlockStatementSyntax>(),
-                                                     context, stmtCtx);
-            }
+            if (auto block = stmtCtx.tryGetBlock(context, syntax))
+                return *block;
+
+            result = &BlockStatement::fromSyntax(comp, syntax.as<BlockStatementSyntax>(), context,
+                                                 stmtCtx);
             break;
         case SyntaxKind::TimingControlStatement:
             result = &TimedStatement::fromSyntax(comp, syntax.as<TimingControlStatementSyntax>(),
@@ -200,7 +227,7 @@ const Statement& Statement::bind(const StatementSyntax& syntax, const BindContex
         case SyntaxKind::BlockingEventTriggerStatement:
         case SyntaxKind::NonblockingEventTriggerStatement:
             result = &EventTriggerStatement::fromSyntax(
-                comp, syntax.as<EventTriggerStatementSyntax>(), context);
+                comp, syntax.as<EventTriggerStatementSyntax>(), context, stmtCtx);
             break;
         case SyntaxKind::ProceduralAssignStatement:
         case SyntaxKind::ProceduralForceStatement:
@@ -227,11 +254,11 @@ const Statement& Statement::bind(const StatementSyntax& syntax, const BindContex
             break;
         case SyntaxKind::RandSequenceStatement:
             // We might have an implicit block here; check for that first.
-            result = stmtCtx.tryGetBlock(comp, syntax);
-            if (!result) {
-                result = &RandSequenceStatement::fromSyntax(
-                    comp, syntax.as<RandSequenceStatementSyntax>(), context);
-            }
+            if (auto block = stmtCtx.tryGetBlock(context, syntax))
+                return *block;
+
+            result = &RandSequenceStatement::fromSyntax(
+                comp, syntax.as<RandSequenceStatementSyntax>(), context);
             break;
         default:
             THROW_UNREACHABLE;
@@ -242,28 +269,122 @@ const Statement& Statement::bind(const StatementSyntax& syntax, const BindContex
     return *result;
 }
 
+static BlockStatement* createBlockStatement(
+    Compilation& comp, SmallVector<const Statement*>& buffer, const SyntaxNode& syntax,
+    StatementBlockKind blocKind = StatementBlockKind::Sequential) {
+
+    const Statement* body;
+    if (buffer.size() == 1)
+        body = buffer[0];
+    else
+        body = comp.emplace<StatementList>(buffer.copy(comp), syntax.sourceRange());
+
+    return comp.emplace<BlockStatement>(*body, blocKind, body->sourceRange);
+}
+
+const Statement& Statement::bindBlock(const StatementBlockSymbol& block, const SyntaxNode& syntax,
+                                      const BindContext& context, StatementContext& stmtCtx) {
+    BlockStatement* result;
+    auto& comp = context.getCompilation();
+
+    if (syntax.kind == SyntaxKind::SequentialBlockStatement ||
+        syntax.kind == SyntaxKind::ParallelBlockStatement) {
+        auto& bss = syntax.as<BlockStatementSyntax>();
+        auto& bs =
+            BlockStatement::fromSyntax(comp, bss, context, stmtCtx, /* addInitializers */ true);
+        if (bs.bad())
+            return bs;
+
+        result = &bs.as<BlockStatement>();
+        result->syntax = &bss;
+        context.setAttributes(*result, bss.attributes);
+    }
+    else if (syntax.kind == SyntaxKind::RsCodeBlock) {
+        SmallVectorSized<const Statement*, 8> buffer;
+        bindScopeInitializers(context, buffer);
+
+        for (auto item : syntax.as<RsCodeBlockSyntax>().items) {
+            if (StatementSyntax::isKind(item->kind)) {
+                buffer.append(&bind(item->as<StatementSyntax>(), context, stmtCtx,
+                                    /* inList */ true));
+            }
+        }
+
+        result = createBlockStatement(comp, buffer, syntax);
+    }
+    else {
+        SmallVectorSized<const Statement*, 8> buffer;
+        bindScopeInitializers(context, buffer);
+
+        auto& ss = syntax.as<StatementSyntax>();
+        buffer.append(&bind(ss, context, stmtCtx, /* inList */ false,
+                            /* labelHandled */ true));
+
+        result = createBlockStatement(comp, buffer, syntax);
+        result->syntax = &ss;
+        context.setAttributes(*result, ss.attributes);
+    }
+
+    result->blockSymbol = &block;
+    return *result;
+}
+
+const Statement& Statement::bindItems(const SyntaxList<SyntaxNode>& items,
+                                      const BindContext& context, StatementContext& stmtCtx) {
+    SmallVectorSized<const Statement*, 8> buffer;
+    bindScopeInitializers(context, buffer);
+
+    for (auto item : items) {
+        if (StatementSyntax::isKind(item->kind)) {
+            buffer.append(&bind(item->as<StatementSyntax>(), context, stmtCtx,
+                                /* inList */ true));
+        }
+    }
+
+    if (buffer.size() == 1)
+        return *buffer[0];
+
+    auto& comp = context.getCompilation();
+    return *comp.emplace<StatementList>(buffer.copy(comp), SourceRange());
+}
+
+void Statement::bindScopeInitializers(const BindContext& context,
+                                      SmallVector<const Statement*>& results) {
+    // This relies on the language requiring all declarations be at the
+    // start of a statement block. Additional work would be required to
+    // support declarations anywhere in the block, because as written all
+    // of the initialization will happen at the start of the block, which
+    // might have different side-effects than if they were initialized in
+    // the middle somewhere. The parser currently enforces this for us.
+    auto& scope = *context.scope;
+    auto& comp = scope.getCompilation();
+    for (auto& member : scope.members()) {
+        if (member.kind != SymbolKind::Variable)
+            continue;
+
+        // Filter out implicitly generated function return type variables -- they are
+        // initialized elsewhere. Note that we manufacture a somewhat reasonable
+        // source range here, since we don't have the real one.
+        auto& var = member.as<VariableSymbol>();
+        if (!var.flags.has(VariableFlags::CompilerGenerated)) {
+            SourceRange range{ var.location, var.location + var.name.length() };
+            results.append(comp.emplace<VariableDeclStatement>(var, range));
+        }
+    }
+}
+
 Statement& Statement::badStmt(Compilation& compilation, const Statement* stmt) {
     return *compilation.emplace<InvalidStatement>(stmt);
 }
 
 static void findBlocks(const Scope& scope, const StatementSyntax& syntax,
-                       SmallVector<const StatementBlockSymbol*>& results, bool labelHandled,
-                       bitmask<StatementFlags> flags,
-                       const ProceduralBlockSymbol* parentProcedure) {
+                       SmallVector<const StatementBlockSymbol*>& results, bool labelHandled) {
     if (!labelHandled && hasSimpleLabel(syntax)) {
-        results.append(
-            &StatementBlockSymbol::fromLabeledStmt(scope, syntax, flags, parentProcedure));
+        results.append(&StatementBlockSymbol::fromLabeledStmt(scope, syntax));
         return;
     }
 
-    auto recurse = [&](auto stmt) {
-        findBlocks(scope, *stmt, results, /* lableHandled */ false, flags, parentProcedure);
-    };
-
-    auto recurseF = [&](auto stmt, auto extraFlags) {
-        findBlocks(scope, *stmt, results, /* lableHandled */ false, flags | extraFlags,
-                   parentProcedure);
-    };
+    auto recurse = [&](auto stmt) { findBlocks(scope, *stmt, results, /* lableHandled */ false); };
 
     switch (syntax.kind) {
         case SyntaxKind::ReturnStatement:
@@ -290,26 +411,20 @@ static void findBlocks(const Scope& scope, const StatementSyntax& syntax,
             // - They are unnamed but have variable declarations within them
             auto& block = syntax.as<BlockStatementSyntax>();
             if (block.blockName || block.label) {
-                results.append(
-                    &StatementBlockSymbol::fromSyntax(scope, block, flags, parentProcedure));
+                results.append(&StatementBlockSymbol::fromSyntax(scope, block));
                 return;
             }
 
             for (auto item : block.items) {
                 // If we find any decls at all, this block gets its own scope.
                 if (!StatementSyntax::isKind(item->kind)) {
-                    results.append(
-                        &StatementBlockSymbol::fromSyntax(scope, block, flags, parentProcedure));
+                    results.append(&StatementBlockSymbol::fromSyntax(scope, block));
                     return;
                 }
             }
 
-            StatementFlags extra = StatementFlags::None;
-            if (SemanticFacts::getStatementBlockKind(block) == StatementBlockKind::JoinNone)
-                extra = StatementFlags::InForkJoinNone;
-
             for (auto item : block.items)
-                recurseF(&item->as<StatementSyntax>(), extra);
+                recurse(&item->as<StatementSyntax>());
             return;
         }
 
@@ -338,13 +453,13 @@ static void findBlocks(const Scope& scope, const StatementSyntax& syntax,
             return;
         }
         case SyntaxKind::ForeverStatement:
-            recurseF(syntax.as<ForeverStatementSyntax>().statement, StatementFlags::InLoop);
+            recurse(syntax.as<ForeverStatementSyntax>().statement);
             return;
         case SyntaxKind::LoopStatement:
-            recurseF(syntax.as<LoopStatementSyntax>().statement, StatementFlags::InLoop);
+            recurse(syntax.as<LoopStatementSyntax>().statement);
             return;
         case SyntaxKind::DoWhileStatement:
-            recurseF(syntax.as<DoWhileStatementSyntax>().statement, StatementFlags::InLoop);
+            recurse(syntax.as<DoWhileStatementSyntax>().statement);
             return;
         case SyntaxKind::ForLoopStatement: {
             // For loops are special; if they declare variables, they get
@@ -352,15 +467,13 @@ static void findBlocks(const Scope& scope, const StatementSyntax& syntax,
             auto& forLoop = syntax.as<ForLoopStatementSyntax>();
             if (!forLoop.initializers.empty() &&
                 forLoop.initializers[0]->kind == SyntaxKind::ForVariableDeclaration) {
-                results.append(
-                    &StatementBlockSymbol::fromSyntax(scope, forLoop, flags, parentProcedure));
+                results.append(&StatementBlockSymbol::fromSyntax(scope, forLoop));
             }
             else if (syntax.label) {
-                results.append(
-                    &StatementBlockSymbol::fromLabeledStmt(scope, syntax, flags, parentProcedure));
+                results.append(&StatementBlockSymbol::fromLabeledStmt(scope, syntax));
             }
             else {
-                recurseF(forLoop.statement, StatementFlags::InLoop);
+                recurse(forLoop.statement);
             }
             return;
         }
@@ -369,10 +482,10 @@ static void findBlocks(const Scope& scope, const StatementSyntax& syntax,
             // here to make sure we don't infinitely recurse.
             if (!labelHandled) {
                 results.append(&StatementBlockSymbol::fromSyntax(
-                    scope, syntax.as<ForeachLoopStatementSyntax>(), flags, parentProcedure));
+                    scope, syntax.as<ForeachLoopStatementSyntax>()));
             }
             else {
-                recurseF(syntax.as<ForeachLoopStatementSyntax>().statement, StatementFlags::InLoop);
+                recurse(syntax.as<ForeachLoopStatementSyntax>().statement);
             }
             return;
         case SyntaxKind::TimingControlStatement:
@@ -421,7 +534,7 @@ static void findBlocks(const Scope& scope, const StatementSyntax& syntax,
             // labelHandled here to make sure we don't infinitely recurse.
             if (!labelHandled) {
                 results.append(&StatementBlockSymbol::fromSyntax(
-                    scope, syntax.as<RandSequenceStatementSyntax>(), parentProcedure));
+                    scope, syntax.as<RandSequenceStatementSyntax>()));
             }
             return;
         default:
@@ -429,41 +542,8 @@ static void findBlocks(const Scope& scope, const StatementSyntax& syntax,
     }
 }
 
-void StatementBinder::setSyntax(const Scope& scope, const StatementSyntax& syntax_,
-                                bool labelHandled_, bitmask<StatementFlags> flags_) {
-    stmt = nullptr;
-    syntax = &syntax_;
-    labelHandled = labelHandled_;
-    flags = flags_;
-
-    SmallVectorSized<const StatementBlockSymbol*, 8> buffer;
-    findBlocks(scope, syntax_, buffer, labelHandled, flags, parentProcedure);
-    blocks = buffer.copy(scope.getCompilation());
-}
-
-void StatementBinder::setSyntax(const StatementBlockSymbol& scope,
-                                const ForLoopStatementSyntax& syntax_,
-                                bitmask<StatementFlags> flags_) {
-    stmt = nullptr;
-    syntax = &syntax_;
-    labelHandled = false;
-    flags = flags_;
-
-    SmallVectorSized<const StatementBlockSymbol*, 8> buffer;
-    findBlocks(scope, *syntax_.statement, buffer, labelHandled,
-               flags | StatementFlags::InLoop | StatementFlags::InForLoop, parentProcedure);
-
-    blocks = buffer.copy(scope.getCompilation());
-}
-
-void StatementBinder::setItems(Scope& scope, const SyntaxNode& syntax_,
-                               const SyntaxList<SyntaxNode>& items,
-                               bitmask<StatementFlags> flags_) {
-    stmt = nullptr;
-    syntax = &syntax_;
-    labelHandled = false;
-    isItems = true;
-    flags = flags_;
+span<const StatementBlockSymbol* const> Statement::createAndAddBlockItems(
+    Scope& scope, const SyntaxList<SyntaxNode>& items) {
 
     SmallVectorSized<const StatementBlockSymbol*, 8> buffer;
     for (auto item : items) {
@@ -491,119 +571,34 @@ void StatementBinder::setItems(Scope& scope, const SyntaxNode& syntax_,
                 }
                 break;
             default:
-                findBlocks(scope, item->as<StatementSyntax>(), buffer, labelHandled, flags,
-                           parentProcedure);
+                findBlocks(scope, item->as<StatementSyntax>(), buffer, false);
                 break;
         }
     }
 
-    blocks = buffer.copy(scope.getCompilation());
+    auto blocks = buffer.copy(scope.getCompilation());
     for (auto block : blocks)
         scope.addMember(*block);
+
+    return blocks;
 }
 
-const Statement& StatementBinder::getStatement(const BindContext& context) const {
-    if (!stmt) {
-        // Avoid issues with recursive function calls re-entering this
-        // method while we're still binding.
-        if (isBinding)
-            return InvalidStatement::Instance;
-
-        isBinding = true;
-        auto guard = ScopeGuard([this] { isBinding = false; });
-
-        BindContext ctx = context;
-        if (!flags.has(StatementFlags::InForkJoinNone)) {
-            if (flags.has(StatementFlags::Func))
-                ctx.flags |= BindFlags::Function;
-            if (flags.has(StatementFlags::Final))
-                ctx.flags |= BindFlags::Final;
-        }
-
-        stmt = &bindStatement(ctx);
-    }
-
-    return *stmt;
+span<const StatementBlockSymbol* const> Statement::createBlockItems(const Scope& scope,
+                                                                    const StatementSyntax& syntax,
+                                                                    bool labelHandled) {
+    SmallVectorSized<const StatementBlockSymbol*, 8> buffer;
+    findBlocks(scope, syntax, buffer, labelHandled);
+    return buffer.copy(scope.getCompilation());
 }
 
-const Statement& StatementBinder::bindStatement(const BindContext& context) const {
-    auto& scope = *context.scope;
-    auto& comp = scope.getCompilation();
-    SmallVectorSized<const Statement*, 8> buffer;
+span<const StatementBlockSymbol* const> Statement::createAndAddBlockItems(
+    Scope& scope, const StatementSyntax& syntax, bool labelHandled) {
 
-    auto scopeKind = scope.asSymbol().kind;
-    if (scopeKind == SymbolKind::StatementBlock || scopeKind == SymbolKind::Subroutine) {
-        // This relies on the language requiring all declarations be at the
-        // start of a statement block. Additional work would be required to
-        // support declarations anywhere in the block, because as written all
-        // of the initialization will happen at the start of the block, which
-        // might have different side-effects than if they were initialized in
-        // the middle somewhere. The parser currently enforces this for us.
-        for (auto& member : scope.members()) {
-            if (member.kind != SymbolKind::Variable)
-                continue;
+    auto blocks = createBlockItems(scope, syntax, labelHandled);
+    for (auto block : blocks)
+        scope.addMember(*block);
 
-            // Filter out implicitly generated function return type variables -- they are
-            // initialized elsewhere. Note that we manufacture a somewhat reasonable
-            // source range here, since we don't have the real one.
-            auto& var = member.as<VariableSymbol>();
-            SourceRange range{ var.location, var.location + var.name.length() };
-            if (!var.flags.has(VariableFlags::CompilerGenerated))
-                buffer.append(comp.emplace<VariableDeclStatement>(var, range));
-        }
-    }
-
-    bool anyBad = false;
-    SourceRange sourceRange;
-    Statement::StatementContext stmtCtx;
-    stmtCtx.blocks = blocks;
-    stmtCtx.flags = flags;
-
-    if (isItems) {
-        ASSERT(syntax);
-        const SyntaxList<SyntaxNode>* items;
-        switch (syntax->kind) {
-            case SyntaxKind::RsCodeBlock:
-                items = &syntax->as<RsCodeBlockSyntax>().items;
-                break;
-            case SyntaxKind::ParallelBlockStatement:
-            case SyntaxKind::SequentialBlockStatement:
-                items = &syntax->as<BlockStatementSyntax>().items;
-                break;
-            case SyntaxKind::FunctionDeclaration:
-            case SyntaxKind::TaskDeclaration:
-                items = &syntax->as<FunctionDeclarationSyntax>().items;
-                break;
-            default:
-                THROW_UNREACHABLE;
-        }
-
-        for (auto item : *items) {
-            if (StatementSyntax::isKind(item->kind)) {
-                buffer.append(&Statement::bind(item->as<StatementSyntax>(), context, stmtCtx,
-                                               /* inList */ true));
-                anyBad |= buffer.back()->bad();
-            }
-        }
-    }
-    else if (syntax) {
-        buffer.append(&Statement::bind(syntax->as<StatementSyntax>(), context, stmtCtx,
-                                       /* inList */ false, labelHandled));
-        anyBad |= buffer.back()->bad();
-    }
-    else {
-        sourceRange = { SourceLocation::NoLocation, SourceLocation::NoLocation };
-    }
-
-    ASSERT(anyBad || stmtCtx.blocks.empty());
-
-    if (buffer.size() == 1)
-        return *buffer[0];
-
-    if (anyBad)
-        return InvalidStatement::Instance;
-
-    return *comp.emplace<StatementList>(buffer.copy(comp), sourceRange);
+    return blocks;
 }
 
 ER StatementList::evalImpl(EvalContext& context) const {
@@ -624,28 +619,19 @@ void StatementList::serializeTo(ASTSerializer& serializer) const {
     serializer.endArray();
 }
 
-BlockStatement::BlockStatement(const StatementBlockSymbol& block, SourceRange sourceRange) :
-    Statement(StatementKind::Block, sourceRange), blockKind(block.blockKind), block(&block) {
+Statement& StatementList::makeEmpty(Compilation& compilation) {
+    return *compilation.emplace<StatementList>(span<const Statement* const>(), SourceRange());
 }
 
-void BlockStatement::serializeTo(ASTSerializer& serializer) const {
-    serializer.write("blockKind", toString(blockKind));
-    if (block)
-        serializer.writeLink("block", *block);
-    serializer.write("body", getStatements());
-}
-
-Statement& BlockStatement::fromSyntax(Compilation& compilation, const BlockStatementSyntax& syntax,
-                                      const BindContext& sourceCtx, StatementContext& stmtCtx) {
-    ASSERT(!syntax.blockName);
-    ASSERT(!syntax.label);
-
+Statement& BlockStatement::fromSyntax(Compilation& comp, const BlockStatementSyntax& syntax,
+                                      const BindContext& sourceCtx, StatementContext& stmtCtx,
+                                      bool addInitializers) {
     BindContext context = sourceCtx;
     auto blockKind = SemanticFacts::getStatementBlockKind(syntax);
     if (context.flags.has(BindFlags::Function | BindFlags::Final)) {
         if (blockKind == StatementBlockKind::JoinAll || blockKind == StatementBlockKind::JoinAny) {
             context.addDiag(diag::TimingInFuncNotAllowed, syntax.end.range());
-            return badStmt(compilation, nullptr);
+            return badStmt(comp, nullptr);
         }
         else if (blockKind == StatementBlockKind::JoinNone) {
             // The "function body" flag does not propagate through fork-join_none
@@ -658,7 +644,7 @@ Statement& BlockStatement::fromSyntax(Compilation& compilation, const BlockState
         ASSERT(proc);
         context.addDiag(diag::ForkJoinAlwaysComb, syntax.begin.range())
             << SemanticFacts::getProcedureKindStr(proc->procedureKind);
-        return badStmt(compilation, nullptr);
+        return badStmt(comp, nullptr);
     }
 
     bool wasInForkJoin = stmtCtx.flags.has(StatementFlags::InForkJoin);
@@ -667,29 +653,40 @@ Statement& BlockStatement::fromSyntax(Compilation& compilation, const BlockState
 
     bool anyBad = false;
     SmallVectorSized<const Statement*, 8> buffer;
+
+    if (addInitializers)
+        bindScopeInitializers(context, buffer);
+
     for (auto item : syntax.items) {
-        auto& stmt =
-            Statement::bind(item->as<StatementSyntax>(), context, stmtCtx, /* inList */ true);
-        buffer.append(&stmt);
-        anyBad |= stmt.bad();
+        if (StatementSyntax::isKind(item->kind)) {
+            auto& stmt =
+                Statement::bind(item->as<StatementSyntax>(), context, stmtCtx, /* inList */ true);
+            buffer.append(&stmt);
+            anyBad |= stmt.bad();
+        }
     }
 
-    auto list = compilation.emplace<StatementList>(buffer.copy(compilation), syntax.sourceRange());
-    auto result = compilation.emplace<BlockStatement>(*list, blockKind, syntax.sourceRange());
+    auto result = createBlockStatement(comp, buffer, syntax, blockKind);
 
     if (blockKind != StatementBlockKind::Sequential && !wasInForkJoin)
         stmtCtx.flags &= ~StatementFlags::InForkJoin;
 
     if (anyBad)
-        return badStmt(compilation, result);
+        return badStmt(comp, result);
 
     return *result;
 }
 
-const Statement& BlockStatement::getStatements() const {
-    if (block)
-        return block->getBody();
-    return *list;
+Statement& BlockStatement::makeEmpty(Compilation& compilation) {
+    return *compilation.emplace<BlockStatement>(StatementList::makeEmpty(compilation),
+                                                StatementBlockKind::Sequential, SourceRange());
+}
+
+void BlockStatement::serializeTo(ASTSerializer& serializer) const {
+    serializer.write("blockKind", toString(blockKind));
+    if (blockSymbol)
+        serializer.writeLink("block", *blockSymbol);
+    serializer.write("body", body);
 }
 
 ER BlockStatement::evalImpl(EvalContext& context) const {
@@ -698,14 +695,14 @@ ER BlockStatement::evalImpl(EvalContext& context) const {
         return ER::Fail;
     }
 
-    ER result = getStatements().eval(context);
+    ER result = body.eval(context);
     if (result == ER::Disable) {
         // Check if the disable statement we evaluated was targeting this block.
         // If it was, we've already skipped enough statements, so just clear out
         // the target and continue on.
         auto target = context.getDisableTarget();
         ASSERT(target);
-        if (target == block) {
+        if (target == blockSymbol) {
             result = ER::Success;
             context.setDisableTarget(nullptr, {});
         }
@@ -867,82 +864,108 @@ void VariableDeclStatement::serializeTo(ASTSerializer& serializer) const {
     serializer.writeLink("symbol", symbol);
 }
 
-Statement& ConditionalStatement::fromSyntax(Compilation& compilation,
+Statement& ConditionalStatement::fromSyntax(Compilation& comp,
                                             const ConditionalStatementSyntax& syntax,
                                             const BindContext& context, StatementContext& stmtCtx) {
     bool bad = false;
-    auto& conditions = syntax.predicate->conditions;
-    if (conditions.size() == 0) {
-        bad = true;
-    }
-    else if (conditions.size() > 1) {
-        context.addDiag(diag::NotYetSupported, conditions[1]->sourceRange());
-        bad = true;
-    }
-    else if (conditions[0]->matchesClause) {
-        context.addDiag(diag::NotYetSupported, conditions[0]->matchesClause->sourceRange());
-        bad = true;
+    bool isConst = true;
+    bool isTrue = true;
+    SmallVectorSized<Condition, 2> conditions;
+    BindContext trueContext = context;
+
+    for (auto condSyntax : syntax.predicate->conditions) {
+        auto& cond = Expression::bind(*condSyntax->expr, trueContext);
+        bad |= cond.bad();
+
+        const Pattern* pattern = nullptr;
+        if (condSyntax->matchesClause) {
+            Pattern::VarMap patternVarMap;
+            pattern = &Pattern::bind(*condSyntax->matchesClause->pattern, *cond.type, patternVarMap,
+                                     trueContext);
+
+            // We don't consider the condition to be const if there's a pattern.
+            isConst = false;
+            bad |= pattern->bad();
+        }
+        else {
+            if (!bad && !trueContext.requireBooleanConvertible(cond))
+                bad = true;
+        }
+
+        if (!bad && isConst) {
+            ConstantValue condVal = trueContext.tryEval(cond);
+            if (!condVal)
+                isConst = false;
+            else if (!condVal.isTrue())
+                isTrue = false;
+        }
+
+        conditions.append({ &cond, pattern });
     }
 
+    // If the condition is constant, we know which branch will be taken.
     BindFlags ifFlags = BindFlags::None;
     BindFlags elseFlags = BindFlags::None;
-    auto& cond = Expression::bind(*conditions[0]->expr, context);
-    bad |= cond.bad();
-
-    if (!bad && !context.requireBooleanConvertible(cond))
-        bad = true;
-
-    ConstantValue condVal = context.tryEval(cond);
-    if (condVal) {
-        // If the condition is constant, we know which branch will be taken.
-        if (condVal.isTrue())
+    if (isConst) {
+        if (isTrue)
             elseFlags = BindFlags::UnevaluatedBranch;
         else
             ifFlags = BindFlags::UnevaluatedBranch;
     }
 
-    auto& ifTrue = Statement::bind(*syntax.statement, context.resetFlags(ifFlags), stmtCtx);
+    auto& ifTrue = Statement::bind(*syntax.statement, trueContext.resetFlags(ifFlags), stmtCtx);
+
     const Statement* ifFalse = nullptr;
     if (syntax.elseClause) {
         ifFalse = &Statement::bind(syntax.elseClause->clause->as<StatementSyntax>(),
                                    context.resetFlags(elseFlags), stmtCtx);
     }
 
-    auto result =
-        compilation.emplace<ConditionalStatement>(cond, ifTrue, ifFalse, syntax.sourceRange());
-    if (bad || ifTrue.bad() || (ifFalse && ifFalse->bad()))
-        return badStmt(compilation, result);
+    auto result = comp.emplace<ConditionalStatement>(conditions.copy(comp), ifTrue, ifFalse,
+                                                     syntax.sourceRange());
+    if (bad || conditions.empty() || ifTrue.bad() || (ifFalse && ifFalse->bad()))
+        return badStmt(comp, result);
 
     return *result;
 }
 
 ER ConditionalStatement::evalImpl(EvalContext& context) const {
-    auto result = cond.eval(context);
-    if (result.bad())
-        return ER::Fail;
+    for (auto& cond : conditions) {
+        auto result = cond.expr->eval(context);
+        if (result.bad())
+            return ER::Fail;
 
-    if (result.isTrue())
-        return ifTrue.eval(context);
-    if (ifFalse)
-        return ifFalse->eval(context);
+        if (cond.pattern)
+            result = cond.pattern->eval(context, result, CaseStatementCondition::Normal);
 
-    return ER::Success;
+        if (!result.isTrue()) {
+            if (ifFalse)
+                return ifFalse->eval(context);
+            return ER::Success;
+        }
+    }
+
+    return ifTrue.eval(context);
 }
 
 void ConditionalStatement::serializeTo(ASTSerializer& serializer) const {
-    serializer.write("cond", cond);
+    serializer.startArray("conditions");
+    for (auto& cond : conditions) {
+        serializer.startObject();
+        serializer.write("expr", *cond.expr);
+        if (cond.pattern)
+            serializer.write("pattern", *cond.pattern);
+        serializer.endObject();
+    }
+    serializer.endArray();
+
     serializer.write("ifTrue", ifTrue);
     if (ifFalse)
         serializer.write("ifFalse", *ifFalse);
 }
 
-Statement& CaseStatement::fromSyntax(Compilation& compilation, const CaseStatementSyntax& syntax,
-                                     const BindContext& context, StatementContext& stmtCtx) {
-    bool bad = false;
-    if (syntax.matchesOrInside.kind == TokenKind::MatchesKeyword) {
-        context.addDiag(diag::NotYetSupported, syntax.matchesOrInside.range());
-        bad = true;
-    }
+static std::tuple<CaseStatementCondition, CaseStatementCheck> getConditionAndCheck(
+    const CaseStatementSyntax& syntax) {
 
     CaseStatementCondition condition;
     switch (syntax.caseKeyword.kind) {
@@ -977,9 +1000,18 @@ Statement& CaseStatement::fromSyntax(Compilation& compilation, const CaseStateme
             THROW_UNREACHABLE;
     }
 
+    return { condition, check };
+}
+
+Statement& CaseStatement::fromSyntax(Compilation& compilation, const CaseStatementSyntax& syntax,
+                                     const BindContext& context, StatementContext& stmtCtx) {
+    if (syntax.matchesOrInside.kind == TokenKind::MatchesKeyword)
+        return PatternCaseStatement::fromSyntax(compilation, syntax, context, stmtCtx);
+
     SmallVectorSized<const ExpressionSyntax*, 8> expressions;
     SmallVectorSized<const Statement*, 8> statements;
     const Statement* defStmt = nullptr;
+    bool bad = false;
 
     for (auto item : syntax.items) {
         switch (item->kind) {
@@ -994,9 +1026,6 @@ Statement& CaseStatement::fromSyntax(Compilation& compilation, const CaseStateme
                 bad |= stmt.bad();
                 break;
             }
-            case SyntaxKind::PatternCaseItem:
-                // TODO: support pattern case statements
-                break;
             case SyntaxKind::DefaultCaseItem:
                 // The parser already errored for duplicate defaults,
                 // so just ignore if it happens here.
@@ -1022,6 +1051,8 @@ Statement& CaseStatement::fromSyntax(Compilation& compilation, const CaseStateme
     bad |=
         !Expression::bindMembershipExpressions(context, keyword, wildcard, isInside, allowTypeRefs,
                                                allowOpenRange, *syntax.expr, expressions, bound);
+
+    auto [condition, check] = getConditionAndCheck(syntax);
 
     if (isInside && condition != CaseStatementCondition::Normal) {
         context.addDiag(diag::CaseInsideKeyword, syntax.matchesOrInside.range())
@@ -1194,6 +1225,143 @@ void CaseStatement::serializeTo(ASTSerializer& serializer) const {
     }
 }
 
+Statement& PatternCaseStatement::fromSyntax(Compilation& compilation,
+                                            const CaseStatementSyntax& syntax,
+                                            const BindContext& context, StatementContext& stmtCtx) {
+    ASSERT(syntax.matchesOrInside.kind == TokenKind::MatchesKeyword);
+
+    auto& expr = Expression::bind(*syntax.expr, context);
+    bool bad = expr.bad();
+
+    SmallVectorSized<ItemGroup, 8> items;
+    const Statement* defStmt = nullptr;
+
+    for (auto item : syntax.items) {
+        switch (item->kind) {
+            case SyntaxKind::PatternCaseItem: {
+                Pattern::VarMap varMap;
+                BindContext localCtx = context;
+
+                auto& pci = item->as<PatternCaseItemSyntax>();
+                auto& pattern = Pattern::bind(*pci.pattern, *expr.type, varMap, localCtx);
+                auto& stmt = Statement::bind(*pci.statement, localCtx, stmtCtx);
+                bad |= stmt.bad() || pattern.bad();
+
+                const Expression* filter = nullptr;
+                if (pci.expr) {
+                    filter = &Expression::bind(*pci.expr, localCtx);
+                    if (!bad && !localCtx.requireBooleanConvertible(*filter))
+                        bad = true;
+                }
+
+                items.append({ &pattern, filter, &stmt });
+                break;
+            }
+            case SyntaxKind::DefaultCaseItem:
+                // The parser already errored for duplicate defaults,
+                // so just ignore if it happens here.
+                if (!defStmt) {
+                    defStmt = &Statement::bind(
+                        item->as<DefaultCaseItemSyntax>().clause->as<StatementSyntax>(), context,
+                        stmtCtx);
+                    bad |= defStmt->bad();
+                }
+                break;
+            default:
+                THROW_UNREACHABLE;
+        }
+    }
+
+    auto [condition, check] = getConditionAndCheck(syntax);
+    auto result = compilation.emplace<PatternCaseStatement>(
+        condition, check, expr, items.copy(compilation), defStmt, syntax.sourceRange());
+    if (bad)
+        return badStmt(compilation, result);
+
+    return *result;
+}
+
+ER PatternCaseStatement::evalImpl(EvalContext& context) const {
+    auto cv = expr.eval(context);
+    if (!cv)
+        return ER::Fail;
+
+    // TODO: handle casex / casez pattern matching
+
+    const Statement* matchedStmt = nullptr;
+    SourceRange matchRange;
+
+    for (auto& item : items) {
+        auto val = item.pattern->eval(context, cv, condition);
+        if (!val)
+            return ER::Fail;
+
+        if (!val.isTrue())
+            continue;
+
+        if (item.filter) {
+            val = item.filter->eval(context);
+            if (!val)
+                return ER::Fail;
+
+            if (!val.isTrue())
+                continue;
+        }
+
+        // If we already matched with a previous item, the only we reason
+        // we'd still get here is to check for uniqueness. The presence of
+        // another match means we failed the uniqueness check.
+        if (matchedStmt) {
+            auto& diag =
+                context.addDiag(diag::ConstEvalCaseItemsNotUnique, item.pattern->sourceRange) << cv;
+            diag.addNote(diag::NotePreviousMatch, matchRange);
+            break;
+        }
+
+        matchedStmt = item.stmt;
+        matchRange = item.pattern->sourceRange;
+
+        if (check != CaseStatementCheck::Unique && check != CaseStatementCheck::Unique0)
+            break;
+    }
+
+    if (!matchedStmt)
+        matchedStmt = defaultCase;
+
+    if (matchedStmt)
+        return matchedStmt->eval(context);
+
+    if (check == CaseStatementCheck::Priority || check == CaseStatementCheck::Unique) {
+        auto& diag = context.addDiag(diag::ConstEvalNoCaseItemsMatched, expr.sourceRange);
+        diag << (check == CaseStatementCheck::Priority ? "priority"sv : "unique"sv);
+        diag << cv;
+    }
+
+    return ER::Success;
+}
+
+void PatternCaseStatement::serializeTo(ASTSerializer& serializer) const {
+    serializer.write("condition", toString(condition));
+    serializer.write("check", toString(check));
+    serializer.write("expr", expr);
+    serializer.startArray("items");
+    for (auto const& item : items) {
+        serializer.startObject();
+        serializer.write("pattern", *item.pattern);
+
+        if (item.filter)
+            serializer.write("filter", *item.filter);
+
+        serializer.write("stmt", *item.stmt);
+        serializer.endObject();
+    }
+    serializer.endArray();
+
+    if (defaultCase) {
+        serializer.write("defaultCase", *defaultCase);
+    }
+}
+
 class UnrollVisitor : public ASTVisitor<UnrollVisitor, true, false> {
 public:
     bool anyErrors = false;
@@ -1271,18 +1439,32 @@ public:
     void handle(const ConditionalStatement& stmt) {
         // Evaluate the condition; if not constant visit both sides,
         // otherwise visit only the side that matches the condition.
-        auto cond = step() ? stmt.cond.eval(evalCtx) : ConstantValue();
-        if (!cond) {
+        auto fallback = [&] {
             stmt.ifTrue.visit(*this);
             if (stmt.ifFalse)
                 stmt.ifFalse->visit(*this);
+        };
+
+        for (auto& cond : stmt.conditions) {
+            if (cond.pattern || !step()) {
+                fallback();
+                return;
+            }
+
+            auto result = cond.expr->eval(evalCtx);
+            if (!result) {
+                fallback();
+                return;
+            }
+
+            if (!result.isTrue()) {
+                if (stmt.ifFalse)
+                    stmt.ifFalse->visit(*this);
+                return;
+            }
         }
-        else if (cond.isTrue()) {
-            stmt.ifTrue.visit(*this);
-        }
-        else if (stmt.ifFalse) {
-            stmt.ifFalse->visit(*this);
-        }
+
+        stmt.ifTrue.visit(*this);
     }
 
     void handle(const ExpressionStatement& stmt) {
@@ -1551,7 +1733,7 @@ const Expression* ForeachLoopStatement::buildLoopDims(const ForeachLoopListSynta
         string_view name = idName.identifier.valueText();
 
         // If we previously had skipped dimensions this one can't be dynamically
-        // sized (there would be no way to reach it duration iteration).
+        // sized (there would be no way to reach it during iteration).
         if (!dims.back().range && skippedAny) {
             context.addDiag(diag::ForeachDynamicDimAfterSkipped, idName.sourceRange()) << name;
             return nullptr;
@@ -1581,7 +1763,7 @@ const Expression* ForeachLoopStatement::buildLoopDims(const ForeachLoopListSynta
         // linked list of iterators.
         auto it =
             comp.emplace<IteratorSymbol>(name, idName.identifier.location(), currType, *indexType);
-        it->nextIterator = std::exchange(context.firstIterator, it);
+        it->nextTemp = std::exchange(context.firstTempVar, it);
         dims.back().loopVar = it;
     }
 
@@ -1593,14 +1775,39 @@ Statement& ForeachLoopStatement::fromSyntax(Compilation& compilation,
                                             const BindContext& context, StatementContext& stmtCtx) {
     auto guard = stmtCtx.enterLoop();
 
-    BindContext iterCtx = context;
-    SmallVectorSized<LoopDim, 4> dims;
-    auto arrayRef = buildLoopDims(*syntax.loopList, iterCtx, dims);
-    if (!arrayRef)
-        return badStmt(compilation, nullptr);
+    auto& arrayRef = Expression::bind(*syntax.loopList->arrayName, context);
+    ASSERT(!arrayRef.bad());
 
-    auto& bodyStmt = Statement::bind(*syntax.statement, iterCtx, stmtCtx);
-    auto result = compilation.emplace<ForeachLoopStatement>(*arrayRef, dims.copy(compilation),
+    // Loop variables were already built in the containing block when it was elaborated,
+    // so we just have to find them and associate them with the correct dim ranges here.
+    SmallVectorSized<LoopDim, 4> dims;
+    const Type* type = arrayRef.type;
+    auto range = context.scope->membersOfType<IteratorSymbol>();
+    auto itIt = range.begin();
+
+    for (auto loopVar : syntax.loopList->loopVariables) {
+        if (type->hasFixedRange())
+            dims.append({ type->getFixedRange() });
+        else
+            dims.emplace();
+
+        type = type->getArrayElementType();
+
+        if (loopVar->kind == SyntaxKind::EmptyIdentifierName)
+            continue;
+
+        ASSERT(itIt != range.end());
+        ASSERT(itIt->name == loopVar->as<IdentifierNameSyntax>().identifier.valueText());
+
+        IteratorSymbol* it = const_cast<IteratorSymbol*>(&*itIt);
+        dims.back().loopVar = it;
+        itIt++;
+    }
+
+    ASSERT(itIt == range.end());
+
+    auto& bodyStmt = Statement::bind(*syntax.statement, context, stmtCtx);
+    auto result = compilation.emplace<ForeachLoopStatement>(arrayRef, dims.copy(compilation),
                                                             bodyStmt, syntax.sourceRange());
     if (bodyStmt.bad())
         return badStmt(compilation, result);
@@ -1883,6 +2090,11 @@ Statement& ExpressionStatement::fromSyntax(Compilation& compilation,
             break;
         }
         case ExpressionKind::Assignment:
+            if (auto timing = expr.as<AssignmentExpression>().timingControl)
+                stmtCtx.observeTiming(*timing);
+
+            ok = true;
+            break;
         case ExpressionKind::NewClass:
             ok = true;
             break;
@@ -1950,6 +2162,8 @@ Statement& TimedStatement::fromSyntax(Compilation& compilation,
                                       const TimingControlStatementSyntax& syntax,
                                       const BindContext& context, StatementContext& stmtCtx) {
     auto& timing = TimingControl::bind(*syntax.timingControl, context);
+    stmtCtx.observeTiming(timing);
+
     auto& stmt = Statement::bind(*syntax.statement, context, stmtCtx);
     auto result = compilation.emplace<TimedStatement>(timing, stmt, syntax.sourceRange());
 
@@ -2251,7 +2465,8 @@ void WaitOrderStatement::serializeTo(ASTSerializer& serializer) const {
 
 Statement& EventTriggerStatement::fromSyntax(Compilation& compilation,
                                              const EventTriggerStatementSyntax& syntax,
-                                             const BindContext& context) {
+                                             const BindContext& context,
+                                             StatementContext& stmtCtx) {
     auto& target = Expression::bind(*syntax.name, context);
     if (target.bad())
         return badStmt(compilation, nullptr);
@@ -2262,8 +2477,10 @@ Statement& EventTriggerStatement::fromSyntax(Compilation& compilation,
     }
 
     const TimingControl* timing = nullptr;
-    if (syntax.timing)
+    if (syntax.timing) {
         timing = &TimingControl::bind(*syntax.timing, context);
+        stmtCtx.observeTiming(*timing);
+    }
 
     bool isNonBlocking = syntax.kind == SyntaxKind::NonblockingEventTriggerStatement;
 

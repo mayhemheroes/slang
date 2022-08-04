@@ -1,11 +1,23 @@
 #include "Test.h"
 
+#include "slang/binding/AssignmentExpressions.h"
+#include "slang/binding/CallExpression.h"
 #include "slang/binding/OperatorExpressions.h"
+#include "slang/binding/Statements.h"
 #include "slang/compilation/Definition.h"
 #include "slang/symbols/ASTSerializer.h"
 #include "slang/symbols/AttributeSymbol.h"
+#include "slang/symbols/BlockSymbols.h"
+#include "slang/symbols/CompilationUnitSymbols.h"
+#include "slang/symbols/InstanceSymbols.h"
+#include "slang/symbols/MemberSymbols.h"
+#include "slang/symbols/ParameterSymbols.h"
+#include "slang/symbols/PortSymbols.h"
+#include "slang/symbols/SubroutineSymbols.h"
+#include "slang/symbols/VariableSymbols.h"
 #include "slang/text/Json.h"
 #include "slang/types/NetType.h"
+#include "slang/types/Type.h"
 
 TEST_CASE("Nets") {
     auto tree = SyntaxTree::fromText(R"(
@@ -128,7 +140,7 @@ endmodule
     compilation.addSyntaxTree(tree);
 
     auto& diags = compilation.getAllDiagnostics();
-    REQUIRE(diags.size() == 9);
+    REQUIRE(diags.size() == 10);
     CHECK(diags[0].code == diag::DelayNotNumeric);
     CHECK(diags[1].code == diag::ConstEvalNonConstVariable);
     CHECK(diags[2].code == diag::ConstEvalNonConstVariable);
@@ -138,6 +150,7 @@ endmodule
     CHECK(diags[6].code == diag::DynamicNotProcedural);
     CHECK(diags[7].code == diag::Delay3OnVar);
     CHECK(diags[8].code == diag::NonProceduralFuncArg);
+    CHECK(diags[9].code == diag::MultipleContAssigns);
 }
 
 TEST_CASE("User defined nettypes") {
@@ -461,8 +474,12 @@ endmodule
     CHECK(attrs[0]->name == "blah3");
     CHECK(attrs[0]->getValue().convertToStr().str() == "str val");
 
-    auto& block = root.lookupName<StatementBlockSymbol>("m.block");
-    auto stmtList = block.getBody().as<StatementList>().list;
+    auto stmtList = m.body.membersOfType<ProceduralBlockSymbol>()
+                        .begin()
+                        ->getBody()
+                        .as<BlockStatement>()
+                        .body.as<StatementList>()
+                        .list;
     REQUIRE(stmtList.size() == 2);
 
     attrs = compilation.getAttributes(*stmtList[0]);
@@ -1161,7 +1178,7 @@ module m;
     else begin
         $warning("ASDFASDF");
     end
-        
+
 endmodule
 )");
 
@@ -1233,6 +1250,9 @@ TEST_CASE("Modport subroutine import") {
     auto tree = SyntaxTree::fromText(R"(
 interface I;
     function void foo(int i); endfunction
+    function void bar(int a, logic b); endfunction
+    task baz; endtask
+
     modport m(import foo, import function void bar(int, logic), task baz);
 endinterface
 
@@ -1272,10 +1292,59 @@ endinterface
     REQUIRE(diags.size() == 6);
     CHECK(diags[0].code == diag::ExpectedImportExport);
     CHECK(diags[1].code == diag::NotASubroutine);
-    CHECK(diags[2].code == diag::TypoIdentifier);
+    CHECK(diags[2].code == diag::IfaceImportExportTarget);
     CHECK(diags[3].code == diag::MethodReturnMismatch);
     CHECK(diags[4].code == diag::NotASubroutine);
     CHECK(diags[5].code == diag::Redefinition);
+}
+
+TEST_CASE("Modport subroutine export") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    extern function void foo(int i, real r);
+    extern forkjoin task t3();
+
+    modport m(export foo, function void bar(int, logic), task baz, export func);
+    modport n(import function void func(int), import task t2);
+    modport o(export t2);
+endinterface
+
+module n(I.m a);
+    initial begin
+        a.foo(42, 3.14);
+        a.bar(1, 1);
+        a.baz();
+    end
+
+    function void a.bar(int i, logic l); endfunction
+    task a.baz; endtask
+    function void a.func(int i); endfunction
+
+    function void a.foo(int i, real r);
+    endfunction
+endmodule
+
+module m;
+    I i1();
+    n n1(i1);
+
+    I i2();
+    n n2(i2.m);
+
+    localparam int baz = 3;
+    task i1.t2;
+        static int i = baz;
+    endtask
+
+    task i2.t2;
+        static int i = baz;
+    endtask
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
 }
 
 TEST_CASE("DPI Imports") {
@@ -1496,7 +1565,7 @@ module m;
     const int a = 1;
     localparam int b = 2;
     logic [3:0] c;
-    
+
     initial begin
         foo(a, a + 2, b, c, c[0]);
     end
@@ -1533,7 +1602,7 @@ module m;
     int i = s3;
     localparam int j = s3;
 
-    specify 
+    specify
         specparam s4 = 2:3:4;
     endspecify
 
@@ -1919,7 +1988,7 @@ endinterface
 interface bus_B (input clk);
     logic [8:1] cmd;
     logic enable;
-    modport test (input clk, enable, cmd);
+    modport test (input clk, enable, output cmd);
     modport dut (output enable);
 endinterface
 
@@ -1962,10 +2031,10 @@ module m1;
     // without parameters, binds to a, b above
     let tmp = a && b;
     a1: assert property (@(posedge clk) eq(p,q));
-    always_comb begin 
+    always_comb begin
         a2: assert (eq(r)); // use default for y
         a3: assert (tmp);
-    end 
+    end
 endmodule : m1
 
 module m2;
@@ -1973,12 +2042,12 @@ module m2;
     logic a, b;
     let y = x;
 
-    always_comb begin 
+    always_comb begin
         // y binds to preceding definition of x
         // in the declarative context of let
         automatic bit x = 1'b0;
         b = a | y;
-    end 
+    end
 endmodule : m2
 
 module m3;
@@ -2006,7 +2075,7 @@ module m5(input clock);
     logic [15:0] a, b;
     logic c, d;
     typedef bit [15:0] bits;
-    
+
     let ones_match(bits x, y) = x == y;
     let same(logic x, y) = x === y;
     always_comb a1: assert(ones_match(a, b));
@@ -2023,11 +2092,11 @@ module m6(input clock);
     let p1(x) = $past(x);
     let p2(x) = $past(x,,,@(posedge clock));
     let s(x) = $sampled(x);
-    always_comb begin 
+    always_comb begin
         a1: assert(p1(a));
         a2: assert(p2(a));
         a3: assert(s(a));
-    end 
+    end
     a4: assert property(@(posedge clock) p1(a));
 endmodule : m6
 
@@ -2041,8 +2110,8 @@ module my_checker;
     wire [1:0] req;
     wire [1:0] vld;
     logic ovr;
-    if (valid_arb(.request(req), .valid(vld), .override(ovr))) begin 
-    end 
+    if (valid_arb(.request(req), .valid(vld), .override(ovr))) begin
+    end
 endmodule
 )");
 
@@ -2294,8 +2363,8 @@ module m;
 
         fork : baz
             automatic int d = 1;
-            c = d;
         join_none
+        c = 1;
     end
 
     wire clk;
@@ -2479,4 +2548,340 @@ endmodule
     Compilation compilation(options);
     compilation.addSyntaxTree(tree);
     NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("always_ff timing control restrictions") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    int i;
+    always_ff i <= 1;
+
+    wire clk;
+    int j;
+    always_ff begin
+        begin : a @(posedge clk) j <= 1; end
+        begin : b @(negedge clk) j <= 0; end
+        #3 j <= 2;
+    end
+
+endmodule
+
+interface I;
+    logic clk;
+    modport foo (input clk);
+endinterface
+
+module n (I.foo i);
+    always_ff @(posedge i.clk) begin end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 3);
+    CHECK(diags[0].code == diag::AlwaysFFEventControl);
+    CHECK(diags[1].code == diag::AlwaysFFEventControl);
+    CHECK(diags[2].code == diag::BlockingInAlwaysFF);
+}
+
+TEST_CASE("driver checking applied to subroutine ref args") {
+    auto tree = SyntaxTree::fromText(R"(
+function automatic void f(ref int a);
+endfunction
+
+function automatic void g(const ref int a);
+endfunction
+
+module m;
+    int i;
+    always_comb begin
+        f(i);
+        g(i);
+    end
+    always_comb begin
+        f(i);
+        g(i);
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::MultipleAlwaysAssigns);
+}
+
+TEST_CASE("hierarchical driver errors") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    int foo;
+endinterface
+
+module m;
+    I i();
+
+    n n1(i);
+    n n2(i);
+endmodule
+
+module n(I i);
+    always_comb i.foo = 1;
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    std::string result = "\n" + report(diags);
+    CHECK(result == R"(
+source:14:17: error: variable 'foo' driven by always_comb procedure cannot be written to by any other process
+    always_comb i.foo = 1;
+                ^~~~~
+note: from 'm.n2' and 'm.n1'
+)");
+}
+
+TEST_CASE("lvalue driver assertion regression GH #551") {
+    auto tree = SyntaxTree::fromText(R"(
+module M #(parameter int W=1) (
+    input  logic         clk,
+    input  logic         rst,
+    input  logic [W-1:0] d,
+    output logic [W-1:0] o
+);
+endmodule
+
+module M2 #(
+    parameter int W = 2
+) (
+    input logic clk,
+    input logic rst
+);
+    localparam int W_MAX = $clog2(W);
+
+    logic [W_MAX:0] d, o;
+    logic x_d, x_o;
+
+    M m [W_MAX+1:0] (
+        .clk (clk),
+        .rst (rst),
+        .d   ({x_d, d}),
+        .o   ({x_o, o})
+    );
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Subroutine referring to itself in return type") {
+    auto tree = SyntaxTree::fromText(R"(
+function foo foo;
+endfunction
+
+class A;
+    extern function bar bar;
+endclass
+
+function bar A::bar;
+endfunction
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 5);
+    CHECK(diags[0].code == diag::NotAType);
+    CHECK(diags[1].code == diag::RecursiveDefinition);
+    CHECK(diags[2].code == diag::RecursiveDefinition);
+    CHECK(diags[3].code == diag::NotAType);
+    CHECK(diags[4].code == diag::UndeclaredIdentifier);
+}
+
+TEST_CASE("modport direction checking") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    wire w;
+    int j;
+    modport m (ref w, inout j);
+    modport n (output j);
+    modport o (input j);
+endinterface
+
+module m (I i);
+    always_comb i.j = 1;
+endmodule
+
+module n (I.o o);
+    always_comb o.j = 1;
+endmodule
+
+module top;
+    I i();
+    m m1(i);
+    n n1(i);
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 3);
+    CHECK(diags[0].code == diag::InvalidRefArg);
+    CHECK(diags[1].code == diag::InOutVarPortConn);
+    CHECK(diags[2].code == diag::InputPortAssign);
+}
+
+TEST_CASE("Invalid modport clocking block") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    int j;
+    modport m (clocking j);
+endinterface
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::NotAClockingBlock);
+}
+
+TEST_CASE("Explicit modport expressions") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    int j, l;
+    wire w;
+    modport m (input .k({j, l}), output .o({l, j}), inout .p(j),
+               ref .q(w), .r(foo), .s());
+endinterface
+
+module n (I.m m);
+    longint i = m.k;
+    assign m.o = i;
+    int q = m.s;
+endmodule
+
+module top;
+    I i();
+    n n1(i);
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 4);
+    CHECK(diags[0].code == diag::InOutVarPortConn);
+    CHECK(diags[1].code == diag::InvalidRefArg);
+    CHECK(diags[2].code == diag::UndeclaredIdentifier);
+    CHECK(diags[3].code == diag::BadAssignment);
+}
+
+TEST_CASE("Modport import subroutine consteval rules") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    function int foo(int i);
+        return i;
+    endfunction
+
+    extern function int bar(int i);
+
+    modport m(import foo, bar);
+endinterface
+
+module n (I.m m);
+    localparam int j = m.foo(3);
+    localparam int k = m.bar(4);
+
+    function int m.bar(int i);
+        return i;
+    endfunction
+endmodule
+
+module top;
+    I i();
+    n n1(i);
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::ConstEvalSubroutineNotConstant);
+
+    auto& j = compilation.getRoot().lookupName<ParameterSymbol>("top.n1.j");
+    CHECK(j.getValue().integer() == 3);
+}
+
+TEST_CASE("Extern interface method errors") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    extern task t1;
+    extern forkjoin function int f1(int i);
+
+    logic l;
+    function void f2; endfunction
+
+    modport m(input l);
+    modport o(export f1);
+endinterface
+
+module n (I.m m);
+    function void n.foo(int i, real r); endfunction
+    function void m.foo(int i, real r); endfunction
+    function void m.l(int i, real r); endfunction
+    function void m.f2(); endfunction
+    function void m.f1(); endfunction
+endmodule
+
+module p (I.o o);
+endmodule
+
+module q (I.o o);
+    function int o.f1(int i); endfunction
+endmodule
+
+module top;
+    I i();
+    n n1(i);
+    p p1(i);
+    q q1(i);
+
+    function int n1.foo(int i); endfunction
+
+    real r;
+    function int r.foo(int i); endfunction
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 11);
+    CHECK(diags[0].code == diag::MissingExternImpl);
+    CHECK(diags[1].code == diag::ExternFuncForkJoin);
+    CHECK(diags[2].code == diag::MethodReturnMismatch);
+    CHECK(diags[3].code == diag::UndeclaredIdentifier);
+    CHECK(diags[4].code == diag::UnknownMember);
+    CHECK(diags[5].code == diag::NotASubroutine);
+    CHECK(diags[6].code == diag::IfaceMethodNotExtern);
+    CHECK(diags[7].code == diag::MissingExportImpl);
+    CHECK(diags[8].code == diag::DupInterfaceExternMethod);
+    CHECK(diags[9].code == diag::NotAnInterfaceOrPort);
+    CHECK(diags[10].code == diag::NotAnInterfaceOrPort);
 }

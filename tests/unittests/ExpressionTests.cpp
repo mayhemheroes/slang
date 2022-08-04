@@ -1,7 +1,16 @@
 #include "Test.h"
 
-#include "slang/compilation/Compilation.h"
-#include "slang/syntax/SyntaxTree.h"
+#include "slang/binding/AssignmentExpressions.h"
+#include "slang/binding/Expression.h"
+#include "slang/binding/MiscExpressions.h"
+#include "slang/binding/OperatorExpressions.h"
+#include "slang/symbols/BlockSymbols.h"
+#include "slang/symbols/CompilationUnitSymbols.h"
+#include "slang/symbols/InstanceSymbols.h"
+#include "slang/symbols/ParameterSymbols.h"
+#include "slang/symbols/VariableSymbols.h"
+#include "slang/syntax/AllSyntax.h"
+#include "slang/types/Type.h"
 
 SVInt testParameter(const std::string& text, uint32_t index = 0) {
     const auto& fullText = "module Top; " + text + " endmodule";
@@ -1783,7 +1792,7 @@ TEST_CASE("Virtual interface data type") {
     auto tree = SyntaxTree::fromText(R"(
 interface Foo;
     logic i;
-    modport m(input i);
+    modport m(output i);
 endinterface
 
 module m;
@@ -2364,7 +2373,7 @@ module m;
 
     int m[2][2] = '{real:3.14};
     struct { int i; real r; } n[2] = '{real:3.14};
-    
+
 endmodule
 )");
 

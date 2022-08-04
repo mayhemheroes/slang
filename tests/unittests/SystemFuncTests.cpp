@@ -1,5 +1,11 @@
 #include "Test.h"
 
+#include "slang/binding/Expression.h"
+#include "slang/symbols/CompilationUnitSymbols.h"
+#include "slang/symbols/ParameterSymbols.h"
+#include "slang/syntax/AllSyntax.h"
+#include "slang/types/Type.h"
+
 TEST_CASE("I/O system tasks") {
     auto tree = SyntaxTree::fromText(R"(
 module m;
@@ -264,7 +270,7 @@ TEST_CASE("Array query functions -- errors") {
     auto tree = SyntaxTree::fromText(R"(
 module m;
     logic [3:1][2:5] foo [3][][$];
-    
+
     localparam int p1 = $left(foo, 4);  // fine
     localparam int p2 = $right(foo[0]); // not constant
     localparam int p3 = $left(foo, p2);
@@ -300,7 +306,7 @@ module m;
 
     localparam int asdfasdf[] = '{p2};
     localparam int p19 = boz();
-    
+
     function int boz;
         automatic int i = $size(asdfasdf);
         return i;
@@ -1073,4 +1079,20 @@ endmodule
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 1);
     CHECK(diags[0].code == diag::ExpressionNotAssignable);
+}
+
+TEST_CASE("Sampled value functions with clocking in always_comb") {
+    auto tree = SyntaxTree::fromText(R"(
+module top;
+    logic clk;
+    logic a, b;
+    always_comb begin
+        a = $past(b,,,@(posedge clk));
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
 }

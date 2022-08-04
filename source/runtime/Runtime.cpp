@@ -13,8 +13,8 @@ void getIOExports(ExportList& results);
 ExportList getExportedFunctions() {
     ExportList results;
     getIOExports(results);
-    
+
     return results;
 }
 
-} // namespace simrt
+} // namespace slang::runtime

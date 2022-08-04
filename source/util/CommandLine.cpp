@@ -319,10 +319,10 @@ std::string CommandLine::expandVar(const char*& ptr, const char* end) {
         // Don't try to expand, just return the whole thing we collected.
         return "$"s + startDelim + varName;
     }
-    else if (isAlphaNumeric(c)) {
+    else if (isValidCIdChar(c)) {
         std::string varName;
         varName += c;
-        while (ptr != end && isAlphaNumeric(*ptr))
+        while (ptr != end && isValidCIdChar(*ptr))
             varName += *ptr++;
 
         return getEnv(varName);
@@ -341,7 +341,7 @@ bool CommandLine::parse(span<const string_view> args, ParseOptions options) {
         if (args.empty())
             throw std::runtime_error("Expected at least one argument");
 
-        programName = fs::path(args[0]).filename().string();
+        programName = fs::path(fs::u8path(args[0])).filename().u8string();
         args = args.subspan(1);
     }
 
@@ -351,9 +351,7 @@ bool CommandLine::parse(span<const string_view> args, ParseOptions options) {
     bool doubleDash = false;
     bool hadUnknowns = false;
 
-    for (auto it = args.begin(); it != args.end(); it++) {
-        string_view arg = *it;
-
+    for (auto arg : args) {
         // If we were previously expecting a value, set that now.
         if (expectingVal) {
             std::string result = expectingVal->set(expectingValName, arg, options.ignoreDuplicates);
@@ -617,7 +615,7 @@ std::string CommandLine::Option::set(string_view name, string_view value, bool i
     std::string pathMem;
     if (isFileName && !value.empty()) {
         std::error_code ec;
-        fs::path path = fs::weakly_canonical(value, ec);
+        fs::path path = fs::weakly_canonical(fs::u8path(value), ec);
         if (!ec) {
             pathMem = path.u8string();
             value = pathMem;

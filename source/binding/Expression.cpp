@@ -266,6 +266,14 @@ const Expression& Expression::bindRefArg(const Type& lhs, bool isConstRef,
         return badExpr(comp, &expr);
     }
 
+    // ref args are considered drivers unless they are const.
+    if (!isConstRef) {
+        // The check for ref-args is more strict than the check for lvalues,
+        // so the net effect of this call is to get a driver registered for
+        // us without duplicating the logic for determining longest static prefix.
+        expr.requireLValue(context);
+    }
+
     return expr;
 }
 
@@ -377,10 +385,10 @@ bool Expression::requireLValue(const BindContext& context, SourceLocation locati
             if (!concat.type->isIntegral())
                 break;
 
-            ASSERT(!longestStaticPrefix);
+            ASSERT(!longestStaticPrefix || flags.has(AssignFlags::SlicedPort));
             for (auto op : concat.operands()) {
-                if (!op->requireLValue(context, location, flags | AssignFlags::InConcat,
-                                       longestStaticPrefix, customEvalContext)) {
+                if (!op->requireLValue(context, location, flags | AssignFlags::InConcat, nullptr,
+                                       customEvalContext)) {
                     return false;
                 }
             }
@@ -804,15 +812,14 @@ Expression& Expression::bindName(Compilation& compilation, const NameSyntax& syn
     if (invocation && invocation->arguments)
         flags |= LookupFlags::AllowDeclaredAfter;
 
-    // Special case scenarios: array iterator expressions, class-scoped randomize calls,
+    // Special case scenarios: temporary variables, class-scoped randomize calls,
     // and expanding sequences and properties.
-    if (context.firstIterator || context.randomizeDetails || context.assertionInstance) {
-        // If we're in an array iterator expression, the iterator variable needs to be findable
-        // even though it's not added to any scope. Check for that case and manually look for
-        // its name here.
-        if (context.firstIterator) {
+    if (context.firstTempVar || context.randomizeDetails || context.assertionInstance) {
+        // If we have any temporary variables, they need to be findable even though they aren't
+        // added to any scope. Check for that case and manually look for its name here.
+        if (context.firstTempVar) {
             LookupResult result;
-            if (Lookup::findIterator(*context.scope, *context.firstIterator, syntax, result)) {
+            if (Lookup::findTempVar(*context.scope, *context.firstTempVar, syntax, result)) {
                 result.reportDiags(context);
                 return bindLookupResult(compilation, result, syntax.sourceRange(), invocation,
                                         withClause, context);

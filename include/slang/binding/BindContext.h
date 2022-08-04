@@ -6,12 +6,12 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <flat_hash_map.hpp>
 #include <tuple>
 
 #include "slang/binding/EvalContext.h"
 #include "slang/binding/Lookup.h"
 #include "slang/numeric/ConstantValue.h"
+#include "slang/util/Hash.h"
 #include "slang/util/Util.h"
 
 namespace slang {
@@ -19,10 +19,10 @@ namespace slang {
 class Compilation;
 class Expression;
 class InstanceSymbolBase;
-class IteratorSymbol;
 class ProceduralBlockSymbol;
 class Scope;
 class Statement;
+class TempVarSymbol;
 class Type;
 class VariableSymbol;
 struct AttributeInstanceSyntax;
@@ -193,10 +193,10 @@ private:
     const Symbol* instanceOrProc = nullptr;
 
 public:
-    /// If an array iteration expression is being bound, this contains the symbol
-    /// representing the first iterator, along with a linked list of any others
-    /// that may be active.
-    const IteratorSymbol* firstIterator = nullptr;
+    /// If any temporary variables have been materialized in this context,
+    /// contains a pointer to the first one along with a linked list of any
+    /// others that may be active. Otherwise nullptr.
+    const TempVarSymbol* firstTempVar = nullptr;
 
     /// A collection of information needed to bind names inside inline constraint
     /// blocks for class and scope randomize function calls.

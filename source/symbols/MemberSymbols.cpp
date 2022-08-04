@@ -176,13 +176,86 @@ ModportPortSymbol& ModportPortSymbol::fromSyntax(const BindContext& context,
         }
     }
 
-    if (result->internalSymbol) {
-        auto sourceType = result->internalSymbol->getDeclaredType();
-        ASSERT(sourceType);
-        result->getDeclaredType()->setLink(*sourceType);
-    }
-    else {
+    if (!result->internalSymbol) {
         result->setType(comp.getErrorType());
+        return *result;
+    }
+
+    auto sourceType = result->internalSymbol->getDeclaredType();
+    ASSERT(sourceType);
+    result->getDeclaredType()->setLink(*sourceType);
+
+    // Perform checking on the connected symbol to make sure it's allowed
+    // given the modport's direction.
+    if (direction != ArgumentDirection::In) {
+        BindContext checkCtx = context.resetFlags(BindFlags::NonProcedural);
+
+        auto loc = result->location;
+        auto& expr = ValueExpressionBase::fromSymbol(checkCtx, *result->internalSymbol, false,
+                                                     { loc, loc + result->name.length() });
+
+        switch (direction) {
+            case ArgumentDirection::In:
+                // unreachable
+                break;
+            case ArgumentDirection::Out:
+                expr.requireLValue(checkCtx, loc, AssignFlags::ModportConn);
+                break;
+            case ArgumentDirection::InOut:
+                expr.requireLValue(checkCtx, loc,
+                                   AssignFlags::ModportConn | AssignFlags::InOutPort);
+                break;
+            case ArgumentDirection::Ref:
+                if (!expr.canConnectToRefArg(/* isConstRef */ false))
+                    checkCtx.addDiag(diag::InvalidRefArg, loc) << expr.sourceRange;
+                break;
+        }
+    }
+
+    return *result;
+}
+
+ModportPortSymbol& ModportPortSymbol::fromSyntax(const BindContext& parentContext,
+                                                 ArgumentDirection direction,
+                                                 const ModportExplicitPortSyntax& syntax) {
+    BindContext context = parentContext.resetFlags(BindFlags::NonProcedural);
+    auto& comp = context.getCompilation();
+    auto name = syntax.name;
+    auto result = comp.emplace<ModportPortSymbol>(name.valueText(), name.location(), direction);
+    result->setSyntax(syntax);
+
+    if (!syntax.expr) {
+        result->setType(comp.getVoidType());
+        return *result;
+    }
+
+    BindFlags extraFlags = BindFlags::None;
+    if (direction == ArgumentDirection::Out || direction == ArgumentDirection::InOut)
+        extraFlags = BindFlags::LValue;
+
+    auto& expr = Expression::bind(*syntax.expr, context, extraFlags);
+    result->explicitConnection = &expr;
+    if (expr.bad()) {
+        result->setType(comp.getErrorType());
+        return *result;
+    }
+
+    result->setType(*expr.type);
+
+    switch (direction) {
+        case ArgumentDirection::In:
+            break;
+        case ArgumentDirection::Out:
+            expr.requireLValue(context, result->location, AssignFlags::ModportConn);
+            break;
+        case ArgumentDirection::InOut:
+            expr.requireLValue(context, result->location,
+                               AssignFlags::ModportConn | AssignFlags::InOutPort);
+            break;
+        case ArgumentDirection::Ref:
+            if (!expr.canConnectToRefArg(/* isConstRef */ false))
+                context.addDiag(diag::InvalidRefArg, result->location) << expr.sourceRange;
+            break;
     }
 
     return *result;
@@ -192,6 +265,8 @@ void ModportPortSymbol::serializeTo(ASTSerializer& serializer) const {
     serializer.write("direction", toString(direction));
     if (internalSymbol)
         serializer.writeLink("internalSymbol", *internalSymbol);
+    if (explicitConnection)
+        serializer.write("explicitConnection", *explicitConnection);
 }
 
 ModportClockingSymbol::ModportClockingSymbol(string_view name, SourceLocation loc) :
@@ -251,9 +326,14 @@ void ModportSymbol::fromSyntax(const BindContext& context, const ModportDeclarat
                                 modport->addMember(mpp);
                                 break;
                             }
-                            case SyntaxKind::ModportExplicitPort:
-                                context.addDiag(diag::NotYetSupported, simplePort->sourceRange());
+                            case SyntaxKind::ModportExplicitPort: {
+                                auto& mpp = ModportPortSymbol::fromSyntax(
+                                    context, direction,
+                                    simplePort->as<ModportExplicitPortSyntax>());
+                                mpp.setAttributes(*modport, portList.attributes);
+                                modport->addMember(mpp);
                                 break;
+                            }
                             default:
                                 THROW_UNREACHABLE;
                         }
@@ -262,29 +342,29 @@ void ModportSymbol::fromSyntax(const BindContext& context, const ModportDeclarat
                 }
                 case SyntaxKind::ModportSubroutinePortList: {
                     auto& portList = port->as<ModportSubroutinePortListSyntax>();
-                    if (portList.importExport.kind == TokenKind::ExportKeyword) {
-                        // TODO: implement
-                    }
-                    else {
-                        for (auto subPort : portList.ports) {
-                            switch (subPort->kind) {
-                                case SyntaxKind::ModportNamedPort: {
-                                    auto& mps = MethodPrototypeSymbol::fromSyntax(
-                                        context, subPort->as<ModportNamedPortSyntax>());
-                                    mps.setAttributes(*modport, portList.attributes);
-                                    modport->addMember(mps);
-                                    break;
-                                }
-                                case SyntaxKind::ModportSubroutinePort: {
-                                    auto& mps = MethodPrototypeSymbol::fromSyntax(
-                                        *context.scope, subPort->as<ModportSubroutinePortSyntax>());
-                                    mps.setAttributes(*modport, portList.attributes);
-                                    modport->addMember(mps);
-                                    break;
-                                }
-                                default:
-                                    THROW_UNREACHABLE;
+                    bool isExport = portList.importExport.kind == TokenKind::ExportKeyword;
+                    if (isExport)
+                        modport->hasExports = true;
+
+                    for (auto subPort : portList.ports) {
+                        switch (subPort->kind) {
+                            case SyntaxKind::ModportNamedPort: {
+                                auto& mps = MethodPrototypeSymbol::fromSyntax(
+                                    context, subPort->as<ModportNamedPortSyntax>(), isExport);
+                                mps.setAttributes(*modport, portList.attributes);
+                                modport->addMember(mps);
+                                break;
                             }
+                            case SyntaxKind::ModportSubroutinePort: {
+                                auto& mps = MethodPrototypeSymbol::fromSyntax(
+                                    *context.scope, subPort->as<ModportSubroutinePortSyntax>(),
+                                    isExport);
+                                mps.setAttributes(*modport, portList.attributes);
+                                modport->addMember(mps);
+                                break;
+                            }
+                            default:
+                                THROW_UNREACHABLE;
                         }
                     }
                     break;
@@ -1225,10 +1305,8 @@ RandSeqProductionSymbol::RandSeqProductionSymbol(Compilation& compilation, strin
     Scope(compilation, this), declaredReturnType(*this) {
 }
 
-RandSeqProductionSymbol& RandSeqProductionSymbol::fromSyntax(
-    Compilation& compilation, const ProductionSyntax& syntax,
-    const ProceduralBlockSymbol* parentProcedure) {
-
+RandSeqProductionSymbol& RandSeqProductionSymbol::fromSyntax(Compilation& compilation,
+                                                             const ProductionSyntax& syntax) {
     auto result = compilation.emplace<RandSeqProductionSymbol>(compilation, syntax.name.valueText(),
                                                                syntax.name.location());
     result->setSyntax(syntax);
@@ -1246,7 +1324,7 @@ RandSeqProductionSymbol& RandSeqProductionSymbol::fromSyntax(
     }
 
     for (auto rule : syntax.rules) {
-        auto& ruleBlock = StatementBlockSymbol::fromSyntax(*result, *rule, parentProcedure);
+        auto& ruleBlock = StatementBlockSymbol::fromSyntax(*result, *rule);
         result->addMember(ruleBlock);
     }
 
@@ -1442,6 +1520,12 @@ RandSeqProductionSymbol::Rule RandSeqProductionSymbol::createRule(
                     << *randJoinExpr->type;
             }
         }
+    }
+
+    for (auto& block : blockRange) {
+        Statement::StatementContext stmtCtx(context);
+        stmtCtx.flags = StatementFlags::InRandSeq;
+        block.getStatement(context, stmtCtx);
     }
 
     return { ruleBlock, prods.copy(comp), weightExpr, randJoinExpr, codeBlock, isRandJoin };

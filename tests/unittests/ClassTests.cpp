@@ -1,6 +1,12 @@
 #include "Test.h"
 
+#include "slang/binding/Expression.h"
 #include "slang/symbols/ClassSymbols.h"
+#include "slang/symbols/CompilationUnitSymbols.h"
+#include "slang/symbols/InstanceSymbols.h"
+#include "slang/symbols/ParameterSymbols.h"
+#include "slang/symbols/SubroutineSymbols.h"
+#include "slang/syntax/AllSyntax.h"
 
 static constexpr const char* PacketClass = R"(
 class Packet;
@@ -1341,11 +1347,12 @@ endclass
     compilation.addSyntaxTree(tree);
 
     auto& diags = compilation.getAllDiagnostics();
-    REQUIRE(diags.size() == 4);
+    REQUIRE(diags.size() == 5);
     CHECK(diags[0].code == diag::VirtualReturnMismatch);
     CHECK(diags[1].code == diag::IfaceNameConflict);
     CHECK(diags[2].code == diag::IfaceNameConflict);
-    CHECK(diags[3].code == diag::IfaceMethodHidden);
+    CHECK(diags[3].code == diag::IfaceNameConflict);
+    CHECK(diags[4].code == diag::IfaceMethodHidden);
 }
 
 TEST_CASE("Interface class diamond with generics") {
@@ -2134,8 +2141,8 @@ module m;
     int a, b;
     initial begin
         b = randomize(a) with {
-            a dist { 1 :/ 1, [9:2] :/ 9};
-            a inside {[9:1]};
+            a dist { 1 :/ 1, [2:9] :/ 9};
+            a inside {[1:9]};
         };
     end
 endmodule
@@ -2565,4 +2572,67 @@ endfunction
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 1);
     CHECK(diags[0].code == diag::Redefinition);
+}
+
+TEST_CASE("Class method driver crash regress GH #552") {
+    auto tree = SyntaxTree::fromText(R"(
+class B;
+    int v[$];
+endclass
+
+class C;
+    virtual function B get();
+    endfunction
+    function f();
+        get().v.delete();
+    endfunction
+endclass
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Reversed dist range treated as empty") {
+    auto tree = SyntaxTree::fromText(R"(
+class C;
+    rand bit [4:0] a;
+    constraint a_c {
+        a dist { 16 :/ 1, [15:1] :/ 1};
+    }
+endclass
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::ReversedOpenRange);
+}
+
+TEST_CASE("Access to static class data member with incomplete forward typedef") {
+    auto tree = SyntaxTree::fromText(R"(
+typedef class S;
+typedef class A;
+
+class C;
+    function f();
+        A a = new();
+        S::a["test"] = a;
+    endfunction
+endclass
+
+class S;
+    static A a[string];
+endclass
+
+class A;
+endclass
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
 }

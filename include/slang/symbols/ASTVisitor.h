@@ -13,7 +13,7 @@
 #include "slang/binding/LiteralExpressions.h"
 #include "slang/binding/MiscExpressions.h"
 #include "slang/binding/OperatorExpressions.h"
-#include "slang/binding/PatternExpressions.h"
+#include "slang/binding/Patterns.h"
 #include "slang/binding/SelectExpressions.h"
 #include "slang/binding/Statements.h"
 #include "slang/binding/TimingControl.h"
@@ -95,12 +95,20 @@ public:
         }
     }
 
-    void visitInvalid(const Expression&) {}
-    void visitInvalid(const Statement&) {}
-    void visitInvalid(const TimingControl&) {}
-    void visitInvalid(const Constraint&) {}
-    void visitInvalid(const AssertionExpr&) {}
-    void visitInvalid(const BinsSelectExpr&) {}
+    void visitInvalid(const Expression&) {
+    }
+    void visitInvalid(const Statement&) {
+    }
+    void visitInvalid(const TimingControl&) {
+    }
+    void visitInvalid(const Constraint&) {
+    }
+    void visitInvalid(const AssertionExpr&) {
+    }
+    void visitInvalid(const BinsSelectExpr&) {
+    }
+    void visitInvalid(const Pattern&) {
+    }
 
 #undef DERIVED
 };
@@ -163,6 +171,7 @@ decltype(auto) Symbol::visit(TVisitor&& visitor, Args&&... args) const {
         SYMBOL(MethodPrototype);
         SYMBOL(UnknownModule);
         SYMBOL(Iterator);
+        SYMBOL(PatternVar);
         SYMBOL(ConstraintBlock);
         SYMBOL(DefParam);
         SYMBOL(Specparam);
@@ -235,6 +244,7 @@ decltype(auto) Statement::visit(TVisitor&& visitor, Args&&... args) const {
         CASE(Disable, DisableStatement);
         CASE(Conditional, ConditionalStatement);
         CASE(Case, CaseStatement);
+        CASE(PatternCase, PatternCaseStatement);
         CASE(ForLoop, ForLoopStatement);
         CASE(RepeatLoop, RepeatLoopStatement);
         CASE(ForeachLoop, ForeachLoopStatement);
@@ -410,6 +420,23 @@ decltype(auto) BinsSelectExpr::visit(TVisitor& visitor, Args&&... args) const {
         CASE(SetExpr, SetExprBinsSelectExpr);
         CASE(WithFilter, BinSelectWithFilterExpr);
         CASE(CrossId, CrossIdBinsSelectExpr);
+    }
+#undef CASE
+    // clang-format on
+    THROW_UNREACHABLE;
+}
+
+template<typename TVisitor, typename... Args>
+decltype(auto) Pattern::visit(TVisitor& visitor, Args&&... args) const {
+    // clang-format off
+#define CASE(k, n) case PatternKind::k: return visitor.visit(*static_cast<const n*>(this), std::forward<Args>(args)...)
+    switch (kind) {
+        case PatternKind::Invalid: return visitor.visitInvalid(*this, std::forward<Args>(args)...);
+        CASE(Wildcard, WildcardPattern);
+        CASE(Constant, ConstantPattern);
+        CASE(Variable, VariablePattern);
+        CASE(Tagged, TaggedPattern);
+        CASE(Structure, StructurePattern);
     }
 #undef CASE
     // clang-format on

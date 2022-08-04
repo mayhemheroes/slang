@@ -15,6 +15,7 @@
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/diagnostics/LookupDiags.h"
 #include "slang/diagnostics/TextDiagnosticClient.h"
+#include "slang/parsing/Parser.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/SourceManager.h"
@@ -659,6 +660,10 @@ std::tuple<const SyntaxNode*, SymbolIndex, bool*> Compilation::findOutOfBlockDec
     return { nullptr, SymbolIndex(), nullptr };
 }
 
+void Compilation::addExternInterfaceMethod(const SubroutineSymbol& method) {
+    externInterfaceMethods.push_back(&method);
+}
+
 void Compilation::noteDefaultClocking(const Scope& scope, const Symbol& clocking,
                                       SourceRange range) {
     auto [it, inserted] = defaultClockingMap.emplace(&scope, &clocking);
@@ -803,6 +808,16 @@ const Diagnostics& Compilation::getSemanticDiagnostics() {
     if (!dpiExports.empty() || !visitor.dpiImports.empty())
         checkDPIMethods(visitor.dpiImports);
 
+    // Check extern interface methods for correctness.
+    for (auto method : externInterfaceMethods)
+        method->connectExternInterfacePrototype();
+
+    if (!visitor.externIfaceProtos.empty())
+        checkExternIfaceMethods(visitor.externIfaceProtos);
+
+    if (!visitor.modportsWithExports.empty())
+        checkModportExports(visitor.modportsWithExports);
+
     // Report on unused out-of-block definitions. These are always a real error.
     for (auto& [key, val] : outOfBlockDecls) {
         auto& [syntax, name, index, used] = val;
@@ -913,7 +928,14 @@ const Diagnostics& Compilation::getSemanticDiagnostics() {
             results.emplace(std::move(diag));
         }
         else {
-            results.emplace(diagList.front());
+            auto it = diagList.begin();
+            ASSERT(it != diagList.end());
+
+            results.emplace(*it);
+            for (++it; it != diagList.end(); ++it) {
+                if (*it != results.back())
+                    results.emplace(*it);
+            }
         }
     }
 
@@ -1103,10 +1125,6 @@ void Compilation::parseParamOverrides(flat_hash_map<string_view, const ConstantV
     }
 }
 
-static bool isValidCIdChar(char c) {
-    return isAlphaNumeric(c) || c == '_';
-}
-
 static bool checkSignaturesMatch(const SubroutineSymbol& a, const SubroutineSymbol& b) {
     if (a.subroutineKind != b.subroutineKind || a.flags != b.flags)
         return false;
@@ -1262,6 +1280,53 @@ void Compilation::checkDPIMethods(span<const SubroutineSymbol* const> dpiImports
                     auto& diag = scope->addDiag(diag::DPIExportDuplicateCId, syntax->name.range());
                     diag << cId;
                     diag.addNote(diag::NotePreviousDefinition, it->second->name.location());
+                }
+            }
+        }
+    }
+}
+
+void Compilation::checkExternIfaceMethods(span<const MethodPrototypeSymbol* const> protos) {
+    for (auto proto : protos) {
+        if (!proto->getFirstExternImpl() && !proto->flags.has(MethodFlags::ForkJoin)) {
+            auto scope = proto->getParentScope();
+            ASSERT(scope);
+
+            auto& parent = scope->asSymbol();
+            if (!parent.name.empty() && !proto->name.empty()) {
+                auto& diag = scope->addDiag(diag::MissingExternImpl, proto->location);
+                diag << (proto->subroutineKind == SubroutineKind::Function ? "function"sv
+                                                                           : "task"sv);
+                diag << parent.name << proto->name;
+            }
+        }
+    }
+}
+
+void Compilation::checkModportExports(
+    span<const std::pair<const InterfacePortSymbol*, const ModportSymbol*>> modports) {
+
+    for (auto [port, modport] : modports) {
+        auto def = port->getDeclaringDefinition();
+        ASSERT(def);
+
+        for (auto& method : modport->membersOfType<MethodPrototypeSymbol>()) {
+            if (method.flags.has(MethodFlags::ModportExport)) {
+                bool found = false;
+                auto impl = method.getFirstExternImpl();
+                while (impl) {
+                    if (impl->impl->getDeclaringDefinition() == def) {
+                        found = true;
+                        break;
+                    }
+                    impl = impl->getNextImpl();
+                }
+
+                if (!found) {
+                    auto& diag =
+                        port->getParentScope()->addDiag(diag::MissingExportImpl, port->location);
+                    diag << method.name << def->name;
+                    diag.addNote(diag::NoteDeclarationHere, method.location);
                 }
             }
         }

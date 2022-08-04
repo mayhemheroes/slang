@@ -6,12 +6,11 @@
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <flat_hash_map.hpp>
-
 #include "slang/binding/Lookup.h"
 #include "slang/diagnostics/Diagnostics.h"
 #include "slang/symbols/SemanticFacts.h"
 #include "slang/symbols/Symbol.h"
+#include "slang/util/Hash.h"
 #include "slang/util/Iterator.h"
 #include "slang/util/Util.h"
 
@@ -298,11 +297,14 @@ private:
     bool handleDataDeclaration(const DataDeclarationSyntax& syntax);
     void handleUserDefinedNet(const UserDefinedNetDeclarationSyntax& syntax);
     void handleNestedDefinition(const ModuleDeclarationSyntax& syntax) const;
+    void handleExportedMethods(span<Symbol* const> deferredMembers) const;
     void reportNameConflict(const Symbol& member, const Symbol& existing) const;
     void checkImportConflict(const Symbol& member, const Symbol& existing) const;
     void addWildcardImport(const PackageImportItemSyntax& item,
                            span<const AttributeInstanceSyntax* const> attributes);
     void addDeferredMembers(const SyntaxNode& syntax);
+    void tryFixupInstances(const DataDeclarationSyntax& syntax, const BindContext& context,
+                           SmallVector<const Symbol*>& results) const;
 
     // The compilation that owns this scope.
     Compilation& compilation;

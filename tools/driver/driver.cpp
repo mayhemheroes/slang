@@ -16,6 +16,7 @@
 #include "slang/diagnostics/ParserDiags.h"
 #include "slang/diagnostics/SysFuncsDiags.h"
 #include "slang/diagnostics/TextDiagnosticClient.h"
+#include "slang/parsing/Parser.h"
 #include "slang/parsing/Preprocessor.h"
 #include "slang/symbols/ASTSerializer.h"
 #include "slang/symbols/CompilationUnitSymbols.h"
@@ -117,7 +118,7 @@ SourceBuffer readSource(SourceManager& sourceManager, const std::string& file) {
 
 bool processCommandFile(const std::string& fileName, CommandLine& cmdLine, bool makeRelative) {
     std::error_code ec;
-    fs::path path = fs::canonical(fileName, ec);
+    fs::path path = fs::canonical(widen(fileName), ec);
     std::vector<char> buffer;
     if (ec || !OS::readFile(path, buffer)) {
         OS::printE(fg(errorColor), "error: ");
@@ -886,8 +887,6 @@ void writeToFile(Stream& os, string_view fileName, String contents) {
 
 #if defined(_MSC_VER)
 #    include <Windows.h>
-#    include <fcntl.h>
-#    include <io.h>
 
 void writeToFile(string_view fileName, string_view contents) {
     if (fileName == "-") {
@@ -901,9 +900,6 @@ void writeToFile(string_view fileName, string_view contents) {
 
 #    ifndef FUZZ_TARGET
 int wmain(int argc, wchar_t** argv) {
-    _setmode(_fileno(stdout), _O_U16TEXT);
-    _setmode(_fileno(stderr), _O_U16TEXT);
-
     auto supportsColors = [](DWORD handle) {
         HANDLE hOut = GetStdHandle(handle);
         if (hOut != INVALID_HANDLE_VALUE) {

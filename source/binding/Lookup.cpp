@@ -381,37 +381,40 @@ bool lookupDownward(span<const NamePlusLoc> nameParts, NameComponents name,
             // If we did the lookup in a modport, check to see if the symbol actually
             // exists in the parent interface.
             auto& prevSym = scope.asSymbol();
-            if (prevSym.kind == SymbolKind::Modport) {
-                symbol = prevSym.getParentScope()->find(name.text);
-                if (symbol) {
-                    // Variables, nets, subroutines can only be accessed via the modport.
-                    // Other symbols aren't permitted in a modport, so they are allowed
-                    // to be accessed through it as if we had accessed the interface
-                    // instance itself.
-                    if (SemanticFacts::isAllowedInModport(symbol->kind)) {
-                        // This is an error, the modport disallows access.
-                        auto def = prevSym.getDeclaringDefinition();
-                        ASSERT(def);
+            if (prevSym.kind != SymbolKind::Modport ||
+                (symbol = prevSym.getParentScope()->find(name.text)) == nullptr) {
 
-                        auto& diag =
-                            result.addDiag(*context.scope, diag::InvalidModportAccess, name.range);
-                        diag << name.text;
-                        diag << def->name;
-                        diag << prevSym.name;
-                        return false;
-                    }
-                    else {
-                        // This is fine, we found what we needed.
-                        continue;
-                    }
+                // Check if we actually had a method prototype found here but it failed
+                // to resolve due to some other error, in which case we should keep quiet.
+                auto& nameMap = scope.getNameMap();
+                if (auto scopeIt = nameMap.find(name.text);
+                    scopeIt != nameMap.end() &&
+                    scopeIt->second->kind == SymbolKind::MethodPrototype) {
+                    return false;
                 }
+
+                auto& diag = result.addDiag(*context.scope, diag::CouldNotResolveHierarchicalPath,
+                                            it->dotLocation);
+                diag << name.text;
+                diag << name.range;
+                return true;
             }
 
-            auto& diag = result.addDiag(*context.scope, diag::CouldNotResolveHierarchicalPath,
-                                        it->dotLocation);
-            diag << name.text;
-            diag << name.range;
-            return true;
+            // Variables, nets, subroutines can only be accessed via the modport.
+            // Other symbols aren't permitted in a modport, so they are allowed
+            // to be accessed through it as if we had accessed the interface
+            // instance itself.
+            if (SemanticFacts::isAllowedInModport(symbol->kind)) {
+                // This is an error, the modport disallows access.
+                auto def = prevSym.getDeclaringDefinition();
+                ASSERT(def);
+
+                auto& diag = result.addDiag(*context.scope, diag::InvalidModportAccess, name.range);
+                diag << name.text;
+                diag << def->name;
+                diag << prevSym.name;
+                return false;
+            }
         }
     }
 
@@ -617,11 +620,6 @@ bool resolveColonNames(SmallVectorSized<NamePlusLoc, 8>& nameParts, int colonPar
         }
     }
 
-    // The initial symbol found cannot be resolved via a forward typedef (i.e. "incomplete")
-    // unless this is within a typedef declaration.
-    if (result.fromForwardTypedef && !flags.has(LookupFlags::TypedefTarget))
-        result.addDiag(*context.scope, diag::ScopeIncompleteTypedef, name.range);
-
     auto validateSymbol = [&] {
         // Handle generic classes and parameter assignments. If this is a generic class,
         // we must have param assignments here (even if the generic class has a default
@@ -723,6 +721,15 @@ bool resolveColonNames(SmallVectorSized<NamePlusLoc, 8>& nameParts, int colonPar
         }
 
         nameParts.pop();
+
+        // The initial symbol found cannot be resolved via a forward typedef (i.e. "incomplete")
+        // unless this is within a typedef declaration.
+        if (result.fromForwardTypedef && !flags.has(LookupFlags::TypedefTarget) &&
+            symbol->isType()) {
+
+            result.fromForwardTypedef = false;
+            result.addDiag(*context.scope, diag::ScopeIncompleteTypedef, name.range);
+        }
     }
 
     if (!validateSymbol())
@@ -1265,8 +1272,8 @@ bool Lookup::ensureAccessible(const Symbol& symbol, const BindContext& context,
     return true;
 }
 
-bool Lookup::findIterator(const Scope& scope, const IteratorSymbol& symbol,
-                          const NameSyntax& syntax, LookupResult& result) {
+bool Lookup::findTempVar(const Scope& scope, const TempVarSymbol& symbol, const NameSyntax& syntax,
+                         LookupResult& result) {
     int colonParts = 0;
     SmallVectorSized<NamePlusLoc, 8> nameParts;
     const NameSyntax* first = &syntax;
@@ -1287,13 +1294,13 @@ bool Lookup::findIterator(const Scope& scope, const IteratorSymbol& symbol,
             return false;
     }
 
-    const IteratorSymbol* curr = &symbol;
+    const TempVarSymbol* curr = &symbol;
     do {
         if (curr->name == name.text) {
             result.found = curr;
             break;
         }
-        curr = curr->nextIterator;
+        curr = curr->nextTemp;
     } while (curr);
 
     if (!result.found)
@@ -1425,6 +1432,15 @@ bool Lookup::findAssertionLocalVar(const BindContext& context, const NameSyntax&
 void Lookup::unqualifiedImpl(const Scope& scope, string_view name, LookupLocation location,
                              optional<SourceRange> sourceRange, bitmask<LookupFlags> flags,
                              SymbolIndex outOfBlockIndex, LookupResult& result) {
+    auto reportRecursiveError = [&](const Symbol& symbol) {
+        if (sourceRange) {
+            auto& diag = result.addDiag(scope, diag::RecursiveDefinition, *sourceRange);
+            diag << name;
+            diag.addNote(diag::NoteDeclarationHere, symbol.location);
+        }
+        result.found = nullptr;
+    };
+
     // Try a simple name lookup to see if we find anything.
     auto& nameMap = scope.getNameMap();
     const Symbol* symbol = nullptr;
@@ -1451,16 +1467,34 @@ void Lookup::unqualifiedImpl(const Scope& scope, string_view name, LookupLocatio
                     case SymbolKind::GenericClassDef:
                         forward = symbol->as<GenericClassDefSymbol>().getFirstForwardDecl();
                         break;
-                    case SymbolKind::Subroutine:
+                    case SymbolKind::Subroutine: {
                         // Subroutines can be referenced before they are declared if they
                         // are tasks or return void (tasks are always set to have a void
                         // return type internally so we only need one check here).
-                        locationGood = symbol->as<SubroutineSymbol>().getReturnType().isVoid();
+                        //
+                        // It's important to check that we're not in the middle of evaluating
+                        // the return type before we try to access that return type or
+                        // we'll hard fail.
+                        auto& sub = symbol->as<SubroutineSymbol>();
+                        if (sub.declaredReturnType.isEvaluating()) {
+                            reportRecursiveError(*symbol);
+                            return;
+                        }
+
+                        locationGood = sub.getReturnType().isVoid();
                         break;
-                    case SymbolKind::MethodPrototype:
+                    }
+                    case SymbolKind::MethodPrototype: {
                         // Same as above.
-                        locationGood = symbol->as<MethodPrototypeSymbol>().getReturnType().isVoid();
+                        auto& sub = symbol->as<MethodPrototypeSymbol>();
+                        if (sub.declaredReturnType.isEvaluating()) {
+                            reportRecursiveError(*symbol);
+                            return;
+                        }
+
+                        locationGood = sub.getReturnType().isVoid();
                         break;
+                    }
                     case SymbolKind::Sequence:
                     case SymbolKind::Property:
                         // Sequences and properties can always be referenced before declaration.
@@ -1509,15 +1543,9 @@ void Lookup::unqualifiedImpl(const Scope& scope, string_view name, LookupLocatio
             // like a parameter and a function, so detect and report the error here to avoid a
             // stack overflow.
             if (result.found) {
-                const DeclaredType* declaredType = result.found->getDeclaredType();
-                if (declaredType && declaredType->isEvaluating()) {
-                    if (sourceRange) {
-                        auto& diag = result.addDiag(scope, diag::RecursiveDefinition, *sourceRange);
-                        diag << name;
-                        diag.addNote(diag::NoteDeclarationHere, result.found->location);
-                    }
-                    result.found = nullptr;
-                }
+                auto declaredType = result.found->getDeclaredType();
+                if (declaredType && declaredType->isEvaluating())
+                    reportRecursiveError(*result.found);
             }
 
             return;

@@ -1,6 +1,12 @@
 #include "Test.h"
 
 #include "slang/compilation/Definition.h"
+#include "slang/symbols/CompilationUnitSymbols.h"
+#include "slang/symbols/InstanceSymbols.h"
+#include "slang/symbols/ParameterSymbols.h"
+#include "slang/symbols/PortSymbols.h"
+#include "slang/symbols/VariableSymbols.h"
+#include "slang/types/Type.h"
 
 TEST_CASE("Module ANSI ports") {
     auto tree = SyntaxTree::fromText(R"(
@@ -374,10 +380,14 @@ endmodule
     CHECK((it++)->code == diag::UsedBeforeDeclared);
     CHECK((it++)->code == diag::UsedBeforeDeclared);
     CHECK((it++)->code == diag::UsedBeforeDeclared);
+    CHECK((it++)->code == diag::UsedBeforeDeclared);
+    CHECK((it++)->code == diag::UsedBeforeDeclared);
+    CHECK((it++)->code == diag::UnconnectedNamedPort);
     CHECK((it++)->code == diag::UnconnectedNamedPort);
     CHECK((it++)->code == diag::UnconnectedNamedPort);
     CHECK((it++)->code == diag::MixingOrderedAndNamedPorts);
     CHECK((it++)->code == diag::DuplicateWildcardPortConnection);
+    CHECK((it++)->code == diag::UnconnectedNamedPort);
     CHECK((it++)->code == diag::UnconnectedNamedPort);
     CHECK((it++)->code == diag::UnconnectedNamedPort);
     CHECK((it++)->code == diag::DuplicatePortConnection);
@@ -411,7 +421,7 @@ module test;
 
     logic a[5];
     m m1(.a(a));
-    
+
     logic b[3][4][5];
     m m2 [3][4] (.a(b));
 
@@ -520,7 +530,7 @@ endinterface
 
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 1);
-    CHECK(diags[0].code == diag::DefinitionUsedAsType);
+    CHECK(diags[0].code == diag::InstanceMissingParens);
 }
 
 TEST_CASE("Instance array connection error reporting") {
@@ -569,7 +579,7 @@ TEST_CASE("Non-ANSI I/O lookup location") {
 module m(a);
     input a;
     var integer c;
-    initial c = a; 
+    initial c = a;
     integer a;
 endmodule
 )");
@@ -710,11 +720,11 @@ interface A_Bus( input logic clk );
     wire req, gnt;
     wire [7:0] addr, data;
 
-    clocking sb @(posedge clk); 
+    clocking sb @(posedge clk);
         input gnt;
         output req, addr;
         inout data;
-        property p1; gnt ##[1:3] data; endproperty 
+        property p1; gnt ##[1:3] data; endproperty
     endclocking
 
     modport DUT ( input clk, req, addr,
@@ -724,7 +734,7 @@ interface A_Bus( input logic clk );
     modport STB ( clocking sb );
 
     modport TB ( input gnt,
-                 output req, addr, 
+                 output req, addr,
                  inout data );
 endinterface
 
@@ -748,7 +758,7 @@ endmodule
 
 program T (A_Bus.STB c, A_Bus.STB d);
     assert property (c.sb.p1);
-    initial begin 
+    initial begin
         c.sb.req <= 1;
         wait( c.sb.gnt == 1 );
 
@@ -757,7 +767,7 @@ program T (A_Bus.STB c, A_Bus.STB d);
         wait( d.sb.gnt == 1 );
 
         d.sb.req <= 0;
-    end 
+    end
 endprogram
 )");
 
@@ -1313,10 +1323,11 @@ endmodule
     compilation.addSyntaxTree(tree);
 
     auto& diags = compilation.getAllDiagnostics();
-    REQUIRE(diags.size() == 3);
+    REQUIRE(diags.size() == 4);
     CHECK(diags[0].code == diag::NetRangeInconsistent);
-    CHECK(diags[1].code == diag::NetInconsistent);
-    CHECK(diags[2].code == diag::NetRangeInconsistent);
+    CHECK(diags[1].code == diag::NetRangeInconsistent);
+    CHECK(diags[2].code == diag::NetInconsistent);
+    CHECK(diags[3].code == diag::NetRangeInconsistent);
 }
 
 TEST_CASE("Inout port conn to variable") {
@@ -1610,6 +1621,32 @@ module cmp
         else if (inA[0] < inA[1] - hyst) out <= 1'b0;
     end
 endmodule : cmp
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Implicit port connection with instance array slicing") {
+    auto tree = SyntaxTree::fromText(R"(
+module M(
+    input logic a,
+    output logic b
+);
+endmodule
+
+module top;
+    localparam N = 8;
+
+    logic [N-1:0] a;
+    logic [N-1:0] b;
+
+    M m [N-1:0] (
+        .a,
+        .b
+    );
+endmodule
 )");
 
     Compilation compilation;

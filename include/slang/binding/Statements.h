@@ -17,6 +17,7 @@
 namespace slang {
 
 class BlockStatement;
+class IteratorSymbol;
 class ProceduralBlockSymbol;
 class RandSeqProductionSymbol;
 class StatementBlockSymbol;
@@ -39,6 +40,7 @@ struct StatementSyntax;
     x(Disable) \
     x(Conditional) \
     x(Case) \
+    x(PatternCase) \
     x(ForLoop) \
     x(RepeatLoop) \
     x(ForeachLoop) \
@@ -80,15 +82,12 @@ ENUM(CaseStatementCheck, CASE_CHECK)
 enum class StatementFlags {
     None = 0,
     InLoop = 1 << 0,
-    Func = 1 << 1,
-    Final = 1 << 2,
-    InForkJoin = 1 << 3,
-    InForkJoinNone = 1 << 4,
-    AutoLifetime = 1 << 5,
-    InRandSeq = 1 << 6,
-    InForLoop = 1 << 7
+    InForkJoin = 1 << 1,
+    InRandSeq = 1 << 2,
+    InForLoop = 1 << 3,
+    HasTimingError = 1 << 4
 };
-BITMASK(StatementFlags, InForLoop)
+BITMASK(StatementFlags, HasTimingError)
 
 /// The base class for all statements in SystemVerilog.
 class Statement {
@@ -139,11 +138,25 @@ public:
         /// Tracks various bits of context about where we are in statement binding.
         bitmask<StatementFlags> flags;
 
+        /// A source range indicating the last event control observed
+        /// while binding statements. This is only updated in always_ff blocks.
+        SourceRange lastEventControl;
+
+        /// The context used for binding statements.
+        const BindContext& rootBindContext;
+
+        explicit StatementContext(const BindContext& context) : rootBindContext(context) {}
+        ~StatementContext();
+
         /// Attempts to match up the head of the block list with the given
         /// statement syntax node. If they match, the block symbol is popped
         /// and returned wrapped inside a BlockStatement.
         /// Otherwise nullptr is returned.
-        BlockStatement* tryGetBlock(Compilation& compilation, const SyntaxNode& syntax);
+        const Statement* tryGetBlock(const BindContext& context, const SyntaxNode& syntax);
+
+        /// Observes that the given timing control has been created and checks it
+        /// for correctness given the current statement context.
+        void observeTiming(const TimingControl& timing);
 
         /// Records that we've entered a loop, and returns a guard that will
         /// revert back to the previous state on destruction.
@@ -167,6 +180,29 @@ public:
                                  StatementContext& stmtCtx, bool inList = false,
                                  bool labelHandled = false);
 
+    /// Binds a statement tree that forms the contents of a block.
+    static const Statement& bindBlock(const StatementBlockSymbol& block, const SyntaxNode& syntax,
+                                      const BindContext& context, StatementContext& stmtCtx);
+
+    /// Binds a list of statement items.
+    static const Statement& bindItems(const SyntaxList<SyntaxNode>& items,
+                                      const BindContext& context, StatementContext& stmtCtx);
+
+    /// Creates any symbols declared by the given statement syntax, such as local variables.
+    static span<const StatementBlockSymbol* const> createBlockItems(const Scope& scope,
+                                                                    const StatementSyntax& syntax,
+                                                                    bool labelHandled);
+
+    /// Creates any symbols declared by the given list of syntax nodes, such as local variables,
+    /// and ignores any statement syntax nodes. The created symbols are added to the given scope.
+    static span<const StatementBlockSymbol* const> createAndAddBlockItems(
+        Scope& scope, const SyntaxList<SyntaxNode>& items);
+
+    /// Creates any symbols declared by the given statement syntax, such as local variables.
+    /// The created symbols are added to the given scope.
+    static span<const StatementBlockSymbol* const> createAndAddBlockItems(
+        Scope& scope, const StatementSyntax& syntax, bool labelHandled);
+
     template<typename T>
     T& as() {
         ASSERT(T::isKind(kind));
@@ -186,36 +222,8 @@ protected:
     Statement(StatementKind kind, SourceRange sourceRange) : kind(kind), sourceRange(sourceRange) {}
 
     static Statement& badStmt(Compilation& compilation, const Statement* stmt);
-};
-
-/// A wrapper around a statement syntax node and some associated symbols that can later
-/// be turned into an actual statement tree. The point of this is to allow symbols to
-/// defer statement binding until its actually needed.
-class StatementBinder {
-public:
-    const ProceduralBlockSymbol* parentProcedure = nullptr;
-
-    void setSyntax(const Scope& scope, const StatementSyntax& syntax, bool labelHandled,
-                   bitmask<StatementFlags> flags);
-    void setSyntax(const StatementBlockSymbol& scope, const ForLoopStatementSyntax& syntax,
-                   bitmask<StatementFlags> flags);
-    void setItems(Scope& scope, const SyntaxNode& syntax, const SyntaxList<SyntaxNode>& items,
-                  bitmask<StatementFlags> flags);
-
-    const Statement& getStatement(const BindContext& context) const;
-    span<const StatementBlockSymbol* const> getBlocks() const { return blocks; }
-    const SyntaxNode* getSyntax() const { return syntax; }
-
-private:
-    const Statement& bindStatement(const BindContext& context) const;
-
-    const SyntaxNode* syntax = nullptr;
-    span<const StatementBlockSymbol* const> blocks;
-    mutable const Statement* stmt = nullptr;
-    bitmask<StatementFlags> flags;
-    mutable bool isBinding = false;
-    bool labelHandled = false;
-    bool isItems = false;
+    static void bindScopeInitializers(const BindContext& context,
+                                      SmallVector<const Statement*>& results);
 };
 
 /// Represents an invalid statement, which is usually generated and inserted
@@ -260,6 +268,8 @@ public:
 
     void serializeTo(ASTSerializer& serializer) const;
 
+    static Statement& makeEmpty(Compilation& compilation);
+
     static bool isKind(StatementKind kind) { return kind == StatementKind::List; }
 
     template<typename TVisitor>
@@ -274,34 +284,29 @@ struct BlockStatementSyntax;
 /// Represents a sequential or parallel block statement.
 class BlockStatement : public Statement {
 public:
+    const Statement& body;
+    const StatementBlockSymbol* blockSymbol = nullptr;
     StatementBlockKind blockKind;
 
-    BlockStatement(const StatementBlockSymbol& block, SourceRange sourceRange);
-    BlockStatement(const StatementList& list, StatementBlockKind blockKind,
-                   SourceRange sourceRange) :
-        Statement(StatementKind::Block, sourceRange),
-        blockKind(blockKind), list(&list) {}
-
-    const Statement& getStatements() const;
-    bool isNamedBlock() const;
+    BlockStatement(const Statement& body, StatementBlockKind blockKind, SourceRange sourceRange) :
+        Statement(StatementKind::Block, sourceRange), body(body), blockKind(blockKind) {}
 
     EvalResult evalImpl(EvalContext& context) const;
 
     void serializeTo(ASTSerializer& serializer) const;
 
     static Statement& fromSyntax(Compilation& compilation, const BlockStatementSyntax& syntax,
-                                 const BindContext& context, StatementContext& stmtCtx);
+                                 const BindContext& context, StatementContext& stmtCtx,
+                                 bool addInitializers = false);
+
+    static Statement& makeEmpty(Compilation& compilation);
 
     static bool isKind(StatementKind kind) { return kind == StatementKind::Block; }
 
     template<typename TVisitor>
     void visitStmts(TVisitor&& visitor) const {
-        getStatements().visit(visitor);
+        body.visit(visitor);
     }
-
-private:
-    const StatementBlockSymbol* block = nullptr;
-    const StatementList* list = nullptr;
 };
 
 struct ReturnStatementSyntax;
@@ -400,14 +405,19 @@ struct ConditionalStatementSyntax;
 
 class ConditionalStatement : public Statement {
 public:
-    const Expression& cond;
+    struct Condition {
+        not_null<const Expression*> expr;
+        const Pattern* pattern = nullptr;
+    };
+
+    span<const Condition> conditions;
     const Statement& ifTrue;
     const Statement* ifFalse;
 
-    ConditionalStatement(const Expression& cond, const Statement& ifTrue, const Statement* ifFalse,
-                         SourceRange sourceRange) :
+    ConditionalStatement(span<const Condition> conditions, const Statement& ifTrue,
+                         const Statement* ifFalse, SourceRange sourceRange) :
         Statement(StatementKind::Conditional, sourceRange),
-        cond(cond), ifTrue(ifTrue), ifFalse(ifFalse) {}
+        conditions(conditions), ifTrue(ifTrue), ifFalse(ifFalse) {}
 
     EvalResult evalImpl(EvalContext& context) const;
 
@@ -420,7 +430,8 @@ public:
 
     template<typename TVisitor>
     void visitExprs(TVisitor&& visitor) const {
-        cond.visit(visitor);
+        for (auto& cond : conditions)
+            cond.expr->visit(visitor);
     }
 
     template<typename TVisitor>
@@ -467,6 +478,53 @@ public:
         for (auto& item : items) {
             for (auto itemExpr : item.expressions)
                 itemExpr->visit(visitor);
+        }
+    }
+
+    template<typename TVisitor>
+    void visitStmts(TVisitor&& visitor) const {
+        for (auto& item : items)
+            item.stmt->visit(visitor);
+        if (defaultCase)
+            defaultCase->visit(visitor);
+    }
+};
+
+class PatternCaseStatement : public Statement {
+public:
+    struct ItemGroup {
+        not_null<const Pattern*> pattern;
+        const Expression* filter;
+        not_null<const Statement*> stmt;
+    };
+
+    const Expression& expr;
+    span<ItemGroup const> items;
+    const Statement* defaultCase = nullptr;
+    CaseStatementCondition condition;
+    CaseStatementCheck check;
+
+    PatternCaseStatement(CaseStatementCondition condition, CaseStatementCheck check,
+                         const Expression& expr, span<ItemGroup const> items,
+                         const Statement* defaultCase, SourceRange sourceRange) :
+        Statement(StatementKind::PatternCase, sourceRange),
+        expr(expr), items(items), defaultCase(defaultCase), condition(condition), check(check) {}
+
+    EvalResult evalImpl(EvalContext& context) const;
+
+    static Statement& fromSyntax(Compilation& compilation, const CaseStatementSyntax& syntax,
+                                 const BindContext& context, StatementContext& stmtCtx);
+
+    void serializeTo(ASTSerializer& serializer) const;
+
+    static bool isKind(StatementKind kind) { return kind == StatementKind::PatternCase; }
+
+    template<typename TVisitor>
+    void visitExprs(TVisitor&& visitor) const {
+        expr.visit(visitor);
+        for (auto& item : items) {
+            if (item.filter)
+                item.filter->visit(visitor);
         }
     }
 
@@ -941,7 +999,7 @@ public:
 
     static Statement& fromSyntax(Compilation& compilation,
                                  const EventTriggerStatementSyntax& syntax,
-                                 const BindContext& context);
+                                 const BindContext& context, StatementContext& stmtCtx);
 
     void serializeTo(ASTSerializer& serializer) const;
 

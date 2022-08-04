@@ -1,7 +1,10 @@
 #include "../source/text/CharInfo.h"
 #include "Test.h"
 
+#include "slang/parsing/Preprocessor.h"
+#include "slang/syntax/AllSyntax.h"
 #include "slang/syntax/SyntaxPrinter.h"
+#include "slang/text/SourceManager.h"
 
 using LF = LexerFacts;
 
@@ -601,6 +604,33 @@ TEST_CASE("Time literals") {
 TEST_CASE("Bad time literal") {
     Token token = lexToken("10mX");
     CHECK(token.kind != TokenKind::TimeLiteral);
+}
+
+TEST_CASE("Colon") {
+    SECTION("Basic Colon") {
+        auto& text = ":";
+        Token token = lexToken(text);
+
+        CHECK(token.kind == TokenKind::Colon);
+        CHECK(token.toString() == ":");
+        CHECK_DIAGNOSTICS_EMPTY;
+    }
+    SECTION("Colon followed by comment") {
+        auto& text = ":// comment";
+        Token token = lexToken(text);
+
+        CHECK(token.kind == TokenKind::Colon);
+        CHECK(token.toString() == ":");
+        CHECK_DIAGNOSTICS_EMPTY;
+    }
+    SECTION("Colon followed by another kind of comment") {
+        auto& text = ":/* comment */";
+        Token token = lexToken(text);
+
+        CHECK(token.kind == TokenKind::Colon);
+        CHECK(token.toString() == ":");
+        CHECK_DIAGNOSTICS_EMPTY;
+    }
 }
 
 TEST_CASE("Misplaced directive char") {

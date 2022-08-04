@@ -12,13 +12,17 @@
 
 namespace slang {
 
+struct ExpressionSyntax;
+struct StatementSyntax;
+
 /// A helper class that allows evaluating arbitrary snippets of SystemVerilog
 /// source code and maintaining state across multiple eval calls.
 class ScriptSession {
 public:
-    ScriptSession();
+    Compilation compilation;
+    CompilationUnitSymbol& scope;
 
-    Compilation& getCompilation() { return compilation; }
+    ScriptSession();
 
     ConstantValue eval(string_view text);
     ConstantValue evalExpression(const ExpressionSyntax& expr);
@@ -28,8 +32,6 @@ public:
 
 private:
     std::vector<std::shared_ptr<SyntaxTree>> syntaxTrees;
-    Compilation compilation;
-    CompilationUnitSymbol& scope;
     EvalContext evalContext;
 };
 

@@ -12,6 +12,7 @@ note NoteReferencedHere "referenced here"
 note NoteAssignedHere "also assigned here"
 note NoteDrivenHere "driven here"
 note NoteOriginalAssign "original assignment here"
+note NoteFromHere2 "from '{}' and '{}'"
 error AttributesNotAllowed "attributes are not allowed here"
 warning not-supported WarnNotYetSupported "language feature not yet supported"
 
@@ -234,11 +235,13 @@ error CoverageBinTransSize "transition coverage bins cannot have an explicit siz
 error InterconnectTypeSyntax "interconnect nets cannot have an explicit type"
 error InterconnectDelaySyntax "interconnect net delays can only be a single value"
 error InterconnectInitializer "interconnect nets cannot have initializers"
+error InvalidEdgeDescriptor "invalid edge descriptor (expected 01, 10, or x/z transitions)"
 warning nonstandard-generate NonStandardGenBlock "standalone generate block without loop or condition is not allowed in SystemVerilog"
 warning empty-pattern EmptyAssignmentPattern "empty assignment patterns are disallowed by SystemVerilog"
 warning nonstandard-foreach NonstandardForeach "non-standard foreach loop variable list"
 warning lifetime-prototype LifetimeForPrototype "lifetime specifier is not allowed on prototype declaration"
 warning nonstandard-dist NonstandardDist "use of parentheses around 'dist' expression is non-standard"
+warning empty-body EmptyBody "{} has empty body (put the semicolon on a separate line to silence this warning)"
 note NoteToMatchThis "to match this '{}'"
 
 subsystem Declarations
@@ -399,6 +402,10 @@ error UserDefPortTwoSided "user-defined nettype '{}' of the port does not match 
 error UserDefPortMixedConcat "cannot mix and match nets with user-defined nettypes in port concatenation (see '{}' and '{}')"
 error InterconnectMultiPort "cannot use interconnect nets in a port concatenation"
 error InterconnectPortVar "cannot connect '{}' to an interconnect port"
+error IfaceMethodNotExtern "cannot provide an implementation for an interface method '{}' that is not declared 'extern'"
+error DupInterfaceExternMethod "more than one implementation provided for extern {} {}.{}"
+error ExternFuncForkJoin "only extern tasks can be declared 'forkjoin'"
+error InstanceMissingParens "{} instantiation is missing port list parentheses"
 error FatalTask "$fatal encountered{}"
 error ErrorTask "$error encountered{}"
 error StaticAssert "static assertion failed{}"
@@ -569,6 +576,10 @@ error LocalFormalVarMultiAssign "cannot bind local variable '{}' to more than on
 error InterconnectReference "cannot reference interconnect net '{}' outside of a net port connection"
 error UserDefPartialDriver "net '{}' with user-defined nettype cannot be partially driven"
 error LocalVarEventExpr "local variable '{}' cannot be referenced in an event expression"
+error PatternTaggedType "expected pattern type {} is not a tagged union"
+error PatternStructType "structure pattern type {} is not a struct"
+error PatternStructTooFew "structure pattern has too few members for target type {}"
+error PatternStructTooMany "structure pattern has too many members for target type {}"
 warning ignored-slice IgnoredSlice "slice size ignored for left-to-right streaming operator"
 warning unsized-concat UnsizedInConcat "unsized integer in concat; using a width of {}"
 warning width-expand WidthExpand "implicit conversion expands from {} to {} bits"
@@ -577,6 +588,7 @@ warning implicit-conv ImplicitConvert "implicit conversion from {} to {}"
 warning nonblocking-final NonblockingInFinal "nonblocking assignments in final blocks have no effect"
 warning port-coercion InputPortCoercion "input net port '{}' coerced to 'inout'"
 warning port-coercion OutputPortCoercion "output net port '{}' coerced to 'inout'"
+warning reversed-range ReversedOpenRange "reversed range will behave as if it were empty"
 
 subsystem Statements
 error ReturnNotInSubroutine "return statement is only valid inside task and function blocks"
@@ -653,6 +665,8 @@ error ConcurrentAssertActionBlock "cannot have '{}' statement in the action bloc
 error InvalidForStepExpression "for loop step expression must be an assignment, increment/decrement operator, or a subroutine call"
 error InvalidBlockEventTarget "block event must specify a task, function, or named block"
 error ForkJoinAlwaysComb "fork-join is not allowed in {} procedure"
+error BlockingInAlwaysFF "always_ff procedures cannot have blocking timing controls"
+error AlwaysFFEventControl "always_ff procedure must have one and only one event control"
 warning event-const EventExpressionConstant "edge expression is constant"
 warning empty-stmt EmptyStatement "extra ';' has no effect"
 warning pointless-void-cast PointlessVoidCast "cast to void for void-returning function '{}' has no effect"
@@ -710,6 +724,7 @@ error NotAValue "'{}' does not refer to a value"
 error NotAHierarchicalScope "cannot use dot operator on '{}'; it is not a variable or hierarchical scope"
 error NotAModport "'{}' is not a modport of '{}'"
 error NotAnInterface "'{}' is not an interface instance or array of instances"
+error NotAnInterfaceOrPort "'{}' is not an interface instance or interface port name"
 error NotAGenvar "'{}' is not a genvar"
 error NotAClass "'{}' is not a class type"
 error NotAGenericClass "'{}' is not a generic class type"
@@ -750,6 +765,7 @@ error LocalNotAllowed "'local' qualifier not allowed here"
 error UnexpectedSelection "unexpected selection expression"
 error BadInstanceArrayRange "cannot select range of [{}:{}] from instance array of [{}:{}]"
 error InstanceArrayEndianMismatch "endianness of selection [{}:{}] must match declared array range of [{}:{}]"
+error IfaceImportExportTarget "could not find target for {} of '{}'"
 warning dup-import DuplicateImport "duplicate import declaration is redundant"
 
 subsystem SysFuncs
@@ -863,6 +879,8 @@ error DefParamCycle "cyclic dependency found when resolving defparam"
 error MultipleDefaultClocking "scope already has a default clocking block"
 error MultipleGlobalClocking "scope already has a global clocking block"
 error MultipleDefaultDisable "scope already has a default disable declaration"
+error MissingExternImpl "no implementation found for extern {} {}.{}"
+error MissingExportImpl "no implementation for modport export '{}' provided by '{}'"
 warning unused-def UnusedDefinition "{} definition is unused"
 warning missing-top NoTopModules "no top-level modules found in design"
 
@@ -881,7 +899,7 @@ group default = { real-underflow real-overflow vector-overflow int-overflow unco
                   unknown-escape-code missing-top warning-task unsized-concat finish-num implicit-conv
                   nonblocking-final constraint-missing missing-format dpi-spec enum-range udp-port-empty
                   lifetime-prototype nonstandard-sys-func nonstandard-foreach nonstandard-dist net-inconsistent
-                  port-coercion }
+                  port-coercion empty-body reversed-range }
 
 group extra = { empty-member empty-stmt dup-import pointless-void-cast case-gen-none case-gen-dup
                 unused-result format-real ignored-slice task-ignored width-trunc dup-attr }

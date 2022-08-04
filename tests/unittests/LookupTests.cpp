@@ -1,7 +1,15 @@
 #include "Test.h"
 
+#include "slang/binding/AssignmentExpressions.h"
+#include "slang/binding/MiscExpressions.h"
 #include "slang/compilation/Compilation.h"
+#include "slang/symbols/BlockSymbols.h"
+#include "slang/symbols/CompilationUnitSymbols.h"
+#include "slang/symbols/InstanceSymbols.h"
+#include "slang/symbols/ParameterSymbols.h"
+#include "slang/symbols/VariableSymbols.h"
 #include "slang/syntax/SyntaxTree.h"
+#include "slang/types/Type.h"
 
 TEST_CASE("Explicit import lookup") {
     auto tree = SyntaxTree::fromText(R"(
@@ -522,7 +530,7 @@ module m;
     always_comb array[-1:-4][0].foo = 1;
     always_comb array[-1+:-4][0].foo = 1;
     always_comb array[-1+:4][0].foo = 1;
-    
+
 endmodule
 )");
 
@@ -1608,19 +1616,19 @@ endpackage
 
 package p2;
     import p1::x;
-    export p1::*; // exports p1::x as the name "x"; 
+    export p1::*; // exports p1::x as the name "x";
                   // p1::x and p2::x are the same declaration
-endpackage 
+endpackage
 
-package p3; 
-    import p1::*; 
-    import p2::*; 
+package p3;
+    import p1::*;
+    import p2::*;
     export p2::*;
-    int q = x; 
-    // p1::x and q are made available from p3. Although p1::y 
-    // is a candidate for import, it is not actually imported 
-    // since it is not referenced. Since p1::y is not imported, 
-    // it is not made available by the export. 
+    int q = x;
+    // p1::x and q are made available from p3. Although p1::y
+    // is a candidate for import, it is not actually imported
+    // since it is not referenced. Since p1::y is not imported,
+    // it is not made available by the export.
 endpackage
 
 package p4;
@@ -1635,16 +1643,16 @@ endpackage
 package p5;
     import p4::*;
     import p1::*;
-    export p1::x;   
-    export p4::x; // p4::x refers to the same declaration 
+    export p1::x;
+    export p4::x; // p4::x refers to the same declaration
                   // as p1::x so this is legal.
 endpackage
 
 package p6;
     import p1::*;
     export p1::x;
-    int x; // Error. export p1::x is considered to                      
-           // be a reference to "x" so a subsequent 
+    int x; // Error. export p1::x is considered to
+           // be a reference to "x" so a subsequent
            // declaration of x is illegal.
 endpackage
 

@@ -13,14 +13,14 @@ namespace slang {
 CompilationUnitSyntax& Parser::parseCompilationUnit() {
     try {
         auto members = parseMemberList<MemberSyntax>(
-            TokenKind::EndOfFile, eofToken, SyntaxKind::CompilationUnit,
+            TokenKind::EndOfFile, meta.eofToken, SyntaxKind::CompilationUnit,
             [this](SyntaxKind parentKind, bool& anyLocalModules) {
                 return parseMember(parentKind, anyLocalModules);
             });
-        return factory.compilationUnit(members, eofToken);
+        return factory.compilationUnit(members, meta.eofToken);
     }
     catch (const RecursionException&) {
-        return factory.compilationUnit(nullptr, eofToken);
+        return factory.compilationUnit(nullptr, meta.eofToken);
     }
 }
 
@@ -53,7 +53,8 @@ ModuleDeclarationSyntax& Parser::parseModule(AttrList attributes, SyntaxKind par
     }
 
     SyntaxKind declKind = getModuleDeclarationKind(header.moduleKeyword.kind);
-    Metadata::Node node{ pp.getDefaultNetType(), pp.getUnconnectedDrive(), pp.getTimeScale() };
+    ParserMetadata::Node node{ pp.getDefaultNetType(), pp.getUnconnectedDrive(),
+                               pp.getTimeScale() };
 
     auto savedDefinitionKind = currentDefinitionKind;
     currentDefinitionKind = declKind;
@@ -307,6 +308,9 @@ MemberSyntax* Parser::parseMember(SyntaxKind parentKind, bool& anyLocalModules) 
             if (auto member = parseExternMember(parentKind, attributes))
                 return member;
             break;
+        case TokenKind::ConfigKeyword:
+            errorIfAttributes(attributes);
+            return &parseConfigDeclaration(attributes);
         default:
             break;
     }
@@ -913,7 +917,7 @@ ClassDeclarationSyntax& Parser::parseClassDeclaration(AttrList attributes,
     auto& result = factory.classDeclaration(attributes, virtualOrInterface, classKeyword, lifetime,
                                             name, parameterList, extendsClause, implementsClause,
                                             semi, members, endClass, endBlockName);
-    meta.classDecls.append(&result);
+    meta.classDecls.push_back(&result);
     return result;
 }
 
@@ -1277,7 +1281,7 @@ DefParamSyntax& Parser::parseDefParam(AttrList attributes) {
         diag::ExpectedVariableAssignment, [this] { return &parseDefParamAssignment(); });
 
     auto& result = factory.defParam(attributes, defparam, buffer.copy(alloc), semi);
-    meta.defparams.append(&result);
+    meta.defparams.push_back(&result);
     return result;
 }
 
@@ -1977,7 +1981,7 @@ PackageImportDeclarationSyntax& Parser::parseImportDeclaration(AttrList attribut
                                                 [this] { return &parsePackageImportItem(); });
 
     auto& result = factory.packageImportDeclaration(attributes, keyword, items.copy(alloc), semi);
-    meta.packageImports.append(&result);
+    meta.packageImports.push_back(&result);
     return result;
 }
 
@@ -2521,7 +2525,7 @@ BindDirectiveSyntax& Parser::parseBindDirective(AttrList attr) {
     auto& instantiation = parseHierarchyInstantiation({});
     auto& result = factory.bindDirective(attr, keyword, target, targetInstances, instantiation);
 
-    meta.bindDirectives.append(&result);
+    meta.bindDirectives.push_back(&result);
     return result;
 }
 
@@ -2827,12 +2831,55 @@ PathDeclarationSyntax& Parser::parsePathDeclaration() {
 }
 
 EdgeDescriptorSyntax& Parser::parseEdgeDescriptor() {
-    // TODO: enforce all the restrictions here
-    auto t1 = consume();
+    Token t1;
+    if (peek(TokenKind::IntegerLiteral) || peek(TokenKind::Identifier)) {
+        t1 = consume();
+    }
+    else {
+        addDiag(diag::ExpectedEdgeDescriptor, peek().location());
+        t1 = Token::createMissing(alloc, TokenKind::Identifier, peek().location());
+        return factory.edgeDescriptor(t1, Token());
+    }
 
     Token t2;
-    if (t1.kind == TokenKind::IntegerLiteral && peek(TokenKind::Identifier))
+    if (t1.kind == TokenKind::IntegerLiteral && peek(TokenKind::Identifier) &&
+        peek().trivia().empty()) {
         t2 = consume();
+    }
+
+    auto t1Raw = t1.rawText();
+    auto t2Raw = t2.valid() ? t2.rawText() : ""sv;
+
+    SourceRange range = t1.range();
+    if (t2)
+        range = { t1.range().start(), t2.range().end() };
+
+    if (t1Raw.length() + t2Raw.length() != 2) {
+        addDiag(diag::InvalidEdgeDescriptor, range);
+    }
+    else {
+        char edges[2];
+        memcpy(edges, t1Raw.data(), t1Raw.length());
+        if (!t2Raw.empty())
+            memcpy(edges + t1Raw.length(), t2Raw.data(), t2Raw.length());
+
+        bool bad = false;
+        bool bothUnknown = true;
+        for (char& edge : edges) {
+            char c = edge = (char)::tolower(edge);
+            if (c == '0' || c == '1') {
+                bothUnknown = false;
+            }
+            else if (!bad && (c != 'x' && c != 'z')) {
+                bad = true;
+                addDiag(diag::InvalidEdgeDescriptor, range);
+            }
+        }
+
+        if (!bad && (edges[0] == edges[1] || bothUnknown)) {
+            addDiag(diag::InvalidEdgeDescriptor, range);
+        }
+    }
 
     return factory.edgeDescriptor(t1, t2);
 }
@@ -2877,7 +2924,6 @@ TimingCheckArgSyntax& Parser::parseTimingCheckArg() {
         return factory.timingCheckEvent(edge, control, terminal, cond);
     }
 
-    // TODO: enforce restrictions on kinds of expressions
     auto& expr = parseMinTypMaxExpression();
     auto cond = parseCondition();
     return factory.expressionTimingCheckArg(expr, cond);
@@ -2999,6 +3045,119 @@ MemberSyntax* Parser::parseExternMember(SyntaxKind parentKind, AttrList attribut
         default:
             return nullptr;
     }
+}
+
+ConfigCellIdentifierSyntax& Parser::parseConfigCellIdentifier() {
+    auto id1 = expect(TokenKind::Identifier);
+    if (peek(TokenKind::Dot)) {
+        auto dot = consume();
+        return factory.configCellIdentifier(id1, dot, expect(TokenKind::Identifier));
+    }
+
+    return factory.configCellIdentifier(Token(), Token(), id1);
+}
+
+ConfigLiblistSyntax& Parser::parseConfigLiblist() {
+    auto liblist = expect(TokenKind::LibListKeyword);
+
+    SmallVectorSized<Token, 4> tokens;
+    while (peek(TokenKind::Identifier))
+        tokens.append(consume());
+
+    return factory.configLiblist(liblist, tokens.copy(alloc));
+}
+
+ConfigUseClauseSyntax& Parser::parseConfigUseClause() {
+    auto use = expect(TokenKind::UseKeyword);
+
+    ConfigCellIdentifierSyntax* name = nullptr;
+    if (peek(TokenKind::Identifier) || !peek(TokenKind::Hash))
+        name = &parseConfigCellIdentifier();
+
+    auto paramAssignments = parseParameterValueAssignment();
+
+    Token colon, config;
+    if (peek(TokenKind::Colon)) {
+        colon = consume();
+        config = expect(TokenKind::ConfigKeyword);
+    }
+
+    return factory.configUseClause(use, name, paramAssignments, colon, config);
+}
+
+ConfigDeclarationSyntax& Parser::parseConfigDeclaration(AttrList attributes) {
+    auto config = consume();
+    auto name = expect(TokenKind::Identifier);
+    auto semi1 = expect(TokenKind::Semicolon);
+
+    SmallVectorSized<ParameterDeclarationStatementSyntax*, 4> localparams;
+    while (peek(TokenKind::LocalParamKeyword)) {
+        Token paramSemi;
+        auto& paramBase = parseParameterDecl(consume(), &paramSemi);
+        localparams.append(&factory.parameterDeclarationStatement(nullptr, paramBase, paramSemi));
+    }
+
+    auto design = expect(TokenKind::DesignKeyword);
+
+    SmallVectorSized<ConfigCellIdentifierSyntax*, 4> topCells;
+    while (peek(TokenKind::Identifier))
+        topCells.append(&parseConfigCellIdentifier());
+
+    auto semi2 = expect(TokenKind::Semicolon);
+
+    SmallVectorSized<ConfigRuleSyntax*, 4> rules;
+    while (true) {
+        auto token = peek();
+        if (token.kind == TokenKind::DefaultKeyword) {
+            consume();
+            auto& liblist = parseConfigLiblist();
+            rules.append(&factory.defaultConfigRule(token, liblist, expect(TokenKind::Semicolon)));
+        }
+        else if (token.kind == TokenKind::CellKeyword) {
+            consume();
+            auto& cellName = parseConfigCellIdentifier();
+
+            ConfigRuleClauseSyntax* rule;
+            if (peek(TokenKind::UseKeyword))
+                rule = &parseConfigUseClause();
+            else
+                rule = &parseConfigLiblist();
+
+            rules.append(
+                &factory.cellConfigRule(token, cellName, *rule, expect(TokenKind::Semicolon)));
+        }
+        else if (token.kind == TokenKind::InstanceKeyword) {
+            consume();
+            auto topModule = expect(TokenKind::Identifier);
+
+            SmallVectorSized<ConfigInstanceIdentifierSyntax*, 4> instanceNames;
+            while (peek(TokenKind::Dot)) {
+                auto dot = consume();
+                instanceNames.append(
+                    &factory.configInstanceIdentifier(dot, expect(TokenKind::Identifier)));
+            }
+
+            ConfigRuleClauseSyntax* rule;
+            if (peek(TokenKind::UseKeyword))
+                rule = &parseConfigUseClause();
+            else
+                rule = &parseConfigLiblist();
+
+            rules.append(&factory.instanceConfigRule(token, topModule, instanceNames.copy(alloc),
+                                                     *rule, expect(TokenKind::Semicolon)));
+        }
+        else {
+            break;
+        }
+    }
+
+    auto endconfig = expect(TokenKind::EndConfigKeyword);
+    auto blockName = parseNamedBlockClause();
+    checkBlockNames(name, blockName);
+
+    return factory.configDeclaration(attributes, config, name, semi1, localparams.copy(alloc),
+                                     design, topCells.copy(alloc), semi2, rules.copy(alloc),
+                                     endconfig, blockName);
 }
 
 void Parser::checkMemberAllowed(const SyntaxNode& member, SyntaxKind parentKind) {

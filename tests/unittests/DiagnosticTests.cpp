@@ -2,6 +2,7 @@
 
 #include "slang/diagnostics/DiagnosticClient.h"
 #include "slang/diagnostics/TextDiagnosticClient.h"
+#include "slang/text/SourceManager.h"
 
 TEST_CASE("Diagnostic Line Number") {
     auto& text = "`include \"foofile\"\nident";
@@ -331,7 +332,7 @@ i + 1 ()
     auto tree = SyntaxTree::fromText(R"(
 module m;
     int i;
-    int j = 
+    int j =
 `include "fake-include1.svh"
     ;
 endmodule
