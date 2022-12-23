@@ -2,7 +2,8 @@
 //! @file Iterator.h
 //! @brief Helper classes for working with iterators
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -22,6 +23,8 @@ public:
 
     TIterator begin() const { return m_begin; }
     TIterator end() const { return m_end; }
+
+    bool empty() const { return begin() == end(); }
 
     /// Computes the number of elements in the range via std::distance.
     /// Not necessarily very efficient.

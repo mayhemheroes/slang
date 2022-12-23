@@ -1,16 +1,19 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
-#include "slang/binding/AssignmentExpressions.h"
-#include "slang/binding/Expression.h"
-#include "slang/binding/MiscExpressions.h"
-#include "slang/binding/OperatorExpressions.h"
-#include "slang/symbols/BlockSymbols.h"
-#include "slang/symbols/CompilationUnitSymbols.h"
-#include "slang/symbols/InstanceSymbols.h"
-#include "slang/symbols/ParameterSymbols.h"
-#include "slang/symbols/VariableSymbols.h"
+#include "slang/ast/Expression.h"
+#include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/expressions/OperatorExpressions.h"
+#include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/Type.h"
 #include "slang/syntax/AllSyntax.h"
-#include "slang/types/Type.h"
 
 SVInt testParameter(const std::string& text, uint32_t index = 0) {
     const auto& fullText = "module Top; " + text + " endmodule";
@@ -44,14 +47,14 @@ TEST_CASE("Evaluate assignment expression") {
     auto& scope = compilation.createScriptScope();
 
     auto varToken = syntax->root().getFirstToken();
-    VariableSymbol local{ varToken.valueText(), varToken.location(), VariableLifetime::Automatic };
+    VariableSymbol local{varToken.valueText(), varToken.location(), VariableLifetime::Automatic};
     local.setType(compilation.getIntType());
 
     // Bind the expression tree to the symbol
     scope.addMember(local);
-    auto& bound =
-        Expression::bind(syntax->root().as<ExpressionSyntax>(),
-                         BindContext(scope, LookupLocation::max), BindFlags::AssignmentAllowed);
+    auto& bound = Expression::bind(syntax->root().as<ExpressionSyntax>(),
+                                   ASTContext(scope, LookupLocation::max),
+                                   ASTFlags::AssignmentAllowed);
     REQUIRE(syntax->diagnostics().empty());
 
     // Initialize `i` to 1.
@@ -79,14 +82,14 @@ TEST_CASE("Check type propagation") {
     auto& scope = compilation.createScriptScope();
 
     auto varToken = syntax->root().getFirstToken();
-    VariableSymbol local{ varToken.valueText(), varToken.location(), VariableLifetime::Automatic };
+    VariableSymbol local{varToken.valueText(), varToken.location(), VariableLifetime::Automatic};
     local.setType(compilation.getType(20, IntegralFlags::Unsigned));
 
     // Bind the expression tree to the symbol
     scope.addMember(local);
-    auto& bound =
-        Expression::bind(syntax->root().as<ExpressionSyntax>(),
-                         BindContext(scope, LookupLocation::max), BindFlags::AssignmentAllowed);
+    auto& bound = Expression::bind(syntax->root().as<ExpressionSyntax>(),
+                                   ASTContext(scope, LookupLocation::max),
+                                   ASTFlags::AssignmentAllowed);
 
     REQUIRE(syntax->diagnostics().empty());
 
@@ -108,14 +111,14 @@ TEST_CASE("Check type propagation 2") {
 
     // Fabricate a symbol for the `i` variable
     auto varToken = syntax->root().getFirstToken();
-    VariableSymbol local{ varToken.valueText(), varToken.location(), VariableLifetime::Automatic };
+    VariableSymbol local{varToken.valueText(), varToken.location(), VariableLifetime::Automatic};
     local.setType(compilation.getType(20, IntegralFlags::Unsigned));
 
     // Bind the expression tree to the symbol
     scope.addMember(local);
-    auto& bound =
-        Expression::bind(syntax->root().as<ExpressionSyntax>(),
-                         BindContext(scope, LookupLocation::max), BindFlags::AssignmentAllowed);
+    auto& bound = Expression::bind(syntax->root().as<ExpressionSyntax>(),
+                                   ASTContext(scope, LookupLocation::max),
+                                   ASTFlags::AssignmentAllowed);
     REQUIRE(syntax->diagnostics().empty());
 
     CHECK(bound.type->getBitWidth() == 20);
@@ -143,14 +146,14 @@ TEST_CASE("Check type propagation real") {
 
     // Fabricate a symbol for the `i` variable
     auto varToken = syntax->root().getFirstToken();
-    VariableSymbol local{ varToken.valueText(), varToken.location(), VariableLifetime::Automatic };
+    VariableSymbol local{varToken.valueText(), varToken.location(), VariableLifetime::Automatic};
     local.setType(compilation.getType(20, IntegralFlags::Unsigned));
 
     // Bind the expression tree to the symbol
     scope.addMember(local);
-    auto& bound =
-        Expression::bind(syntax->root().as<ExpressionSyntax>(),
-                         BindContext(scope, LookupLocation::max), BindFlags::AssignmentAllowed);
+    auto& bound = Expression::bind(syntax->root().as<ExpressionSyntax>(),
+                                   ASTContext(scope, LookupLocation::max),
+                                   ASTFlags::AssignmentAllowed);
     REQUIRE(syntax->diagnostics().empty());
     CHECK(bound.type->getBitWidth() == 20);
 
@@ -197,7 +200,7 @@ TEST_CASE("Expression types") {
 
     auto typeof = [&](const std::string& source) {
         auto tree = SyntaxTree::fromText(string_view(source));
-        BindContext context(scope, LookupLocation::max);
+        ASTContext context(scope, LookupLocation::max);
         return Expression::bind(tree->root().as<ExpressionSyntax>(), context).type->toString();
     };
 
@@ -793,12 +796,12 @@ endmodule
 
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 6);
-    CHECK(diags[0].code == diag::IndexValueInvalid);
-    CHECK(diags[1].code == diag::IndexValueInvalid);
-    CHECK(diags[2].code == diag::BadRangeExpression);
-    CHECK(diags[3].code == diag::BadRangeExpression);
-    CHECK(diags[4].code == diag::BadRangeExpression);
-    CHECK(diags[5].code == diag::BadRangeExpression);
+    CHECK(diags[0].code == diag::IndexOOB);
+    CHECK(diags[1].code == diag::IndexOOB);
+    CHECK(diags[2].code == diag::RangeOOB);
+    CHECK(diags[3].code == diag::RangeOOB);
+    CHECK(diags[4].code == diag::RangeOOB);
+    CHECK(diags[5].code == diag::RangeOOB);
 }
 
 TEST_CASE("Empty concat error") {
@@ -1183,8 +1186,8 @@ endmodule
     CHECK(diags[2].code == diag::UnpackedConcatSize);
     CHECK(diags[3].code == diag::EmptyAssignmentPattern);
     CHECK(diags[4].code == diag::WrongNumberAssignmentPatterns);
-    CHECK(diags[5].code == diag::AssignmentPatternAssociativeType);
-    CHECK(diags[6].code == diag::EmptyAssignmentPattern);
+    CHECK(diags[5].code == diag::EmptyAssignmentPattern);
+    CHECK(diags[6].code == diag::AssignmentPatternAssociativeType);
     CHECK(diags[7].code == diag::EmptyAssignmentPattern);
     CHECK(diags[8].code == diag::WrongNumberAssignmentPatterns);
     CHECK(diags[9].code == diag::EmptyAssignmentPattern);
@@ -1260,6 +1263,23 @@ module m;
     logic [4:0] asdf;
     int i = asdf[2147483647+:2];
     int j = asdf[-2147483647-:3];
+
+    logic [2147483647:2147483646] foo;
+    int k = foo[i+:5];
+
+    localparam int l = func1();
+    function automatic int func1;
+        int a[3];
+        int b = 2147483647;
+        int c[2] = a[b+:2];
+    endfunction
+
+    localparam int n = func2();
+    function automatic int func2;
+        int a[];
+        int b = 2147483647;
+        int c[2] = a[b+:2];
+    endfunction
 endmodule
 )");
 
@@ -1267,9 +1287,12 @@ endmodule
     compilation.addSyntaxTree(tree);
 
     auto& diags = compilation.getAllDiagnostics();
-    REQUIRE(diags.size() == 2);
-    CHECK(diags[0].code == diag::BadRangeExpression);
-    CHECK(diags[1].code == diag::BadRangeExpression);
+    REQUIRE(diags.size() == 5);
+    CHECK(diags[0].code == diag::RangeWidthOverflow);
+    CHECK(diags[1].code == diag::RangeWidthOverflow);
+    CHECK(diags[2].code == diag::RangeWidthOverflow);
+    CHECK(diags[3].code == diag::RangeWidthOverflow);
+    CHECK(diags[4].code == diag::RangeWidthOverflow);
 }
 
 std::string testStringLiteralsToByteArray(const std::string& text) {
@@ -1339,8 +1362,12 @@ auto testBitstream(const std::string& text, DiagCode code = DiagCode()) {
     Compilation compilation;
     compilation.addSyntaxTree(tree);
     auto& diags = compilation.getAllDiagnostics();
-    if (!diags.empty() && code.getSubsystem() != DiagSubsystem::Invalid)
-        CHECK(diags.back().code == code);
+    if (!diags.empty() && code) {
+        if (diags.back().code != code) {
+            CHECK(diags.back().code == code);
+            FAIL_CHECK(report(diags));
+        }
+    }
 
     return diags.size();
 }
@@ -1348,15 +1375,15 @@ auto testBitstream(const std::string& text, DiagCode code = DiagCode()) {
 TEST_CASE("$bits on non-fixed-size array") {
     std::string intBits = "int b = $bits(a);";
     std::string paramBits = "localparam b = $bits(a);";
-    std::string types[] = { "string a;",
-                            "logic[1:0] a[];",
-                            "bit a[$];",
-                            "byte a[int];",
-                            "struct { string a; int b; } a;",
-                            "string a[1:0];",
-                            "bit a[1:0][];",
-                            "bit a[1:0][$];",
-                            "bit a[1:0][int];" };
+    std::string types[] = {"string a;",
+                           "logic[1:0] a[];",
+                           "bit a[$];",
+                           "byte a[int];",
+                           "struct { string a; int b; } a;",
+                           "string a[1:0];",
+                           "bit a[1:0][];",
+                           "bit a[1:0][$];",
+                           "bit a[1:0][int];"};
 
     std::string typeDef = "typedef ";
     for (const auto& type : types) {
@@ -1386,8 +1413,7 @@ dest_t b = dest_t'(a);
         R"(
         typedef struct { bit a[int]; int b; } asso;
         asso x = asso'(64'b0);
-)"
-    };
+)"};
 
     for (const auto& code : illegal)
         CHECK(testBitstream(code, diag::BadConversion) == 1);
@@ -1415,8 +1441,7 @@ typedef byte channel_type[$];
 Packet genPkt;
 channel_type channel = channel_type'(genPkt);
 Packet p = Packet'( channel[0 : 1] );
-)"
-    };
+)"};
 
     for (const auto& code : legal)
         CHECK(testBitstream(code) == 0);
@@ -1436,8 +1461,7 @@ localparam c d = c'(str);
 localparam string str = "hello";
 typedef struct { shortint a[]; byte b[1:0]; } c;
 localparam c d = c'(str);
-)"
-    };
+)"};
 
     for (const auto& code : eval)
         CHECK(testBitstream(code, diag::ConstEvalBitstreamCastSize) == 1);
@@ -1451,39 +1475,39 @@ TEST_CASE("Streaming operators") {
         std::string sv;
         DiagCode msg;
     } illegal[] = {
-        { "int a; int b = {>>{a}} + 2;", diag::BadStreamContext },
-        { "shortint a,b; int c = {{>>{a}}, b};", diag::BadStreamContext },
-        { "int a,b; always_comb {>>{a}} += b;", diag::BadStreamContext },
-        { "int a; int b = {<< string {a}};", diag::BadStreamSlice },
-        { "typedef bit t[]; int a; int b = {<<t{a}};", diag::BadStreamSlice },
-        { "int a, c; int b = {<< c {a}};", diag::ConstEvalNonConstVariable },
-        { "int a; int b = {<< 0 {a}};", diag::ValueMustBePositive },
-        { "real a; int b = {<< 5 {a}};", diag::BadStreamExprType },
-        { "int a; real b = {<< 2 {a}};", diag::BadStreamTargetType },
-        { "int a[2]; real b = $itor(a);", diag::BadSystemSubroutineArg },
-        { "int a; int b = {>> 4 {a}};", diag::IgnoredSlice },
-        { "int a; real b; assign {<< 2 {a}} = b;", diag::BadStreamSourceType },
-        { "int a; shortint b; assign {<< 2 {a}} = b;", diag::BadStreamSize },
-        { "int a; shortint b; assign b = {<< 4 {a}};", diag::BadStreamSize },
-        { "int a; shortint b; assign {>>{b}} = {<< 4 {a}};", diag::BadStreamSize },
-        { "int a; real b = real'({<< 4 {a}});", diag::BadStreamCast },
-        { "int a; shortint b = shortint'({<< 4 {a}});", diag::BadStreamCast },
-        { "typedef struct {byte a[$]; bit b;} dest_t; int a; dest_t b = dest_t'({<<{a}});",
-          diag::BadStreamCast },
-        { "typedef struct {byte a[$]; bit b;} dest_t;int a;dest_t b;assign {>>{b}}={<<{a}};",
-          diag::BadStreamSize },
+        {"int a; int b = {>>{a}} + 2;", diag::BadStreamContext},
+        {"shortint a,b; int c = {{>>{a}}, b};", diag::BadStreamContext},
+        {"int a,b; always_comb {>>{a}} += b;", diag::BadStreamContext},
+        {"int a; int b = {<< string {a}};", diag::BadStreamSlice},
+        {"typedef bit t[]; int a; int b = {<<t{a}};", diag::BadStreamSlice},
+        {"int a, c; int b = {<< c {a}};", diag::ConstEvalNonConstVariable},
+        {"int a; int b = {<< 0 {a}};", diag::ValueMustBePositive},
+        {"real a; int b = {<< 5 {a}};", diag::BadStreamExprType},
+        {"int a; real b = {<< 2 {a}};", diag::BadStreamTargetType},
+        {"int a[2]; real b = $itor(a);", diag::BadSystemSubroutineArg},
+        {"int a; int b = {>> 4 {a}};", diag::IgnoredSlice},
+        {"int a; real b; assign {<< 2 {a}} = b;", diag::BadStreamSourceType},
+        {"int a; shortint b; assign {<< 2 {a}} = b;", diag::BadStreamSize},
+        {"int a; shortint b; assign b = {<< 4 {a}};", diag::BadStreamSize},
+        {"int a; shortint b; assign {>>{b}} = {<< 4 {a}};", diag::BadStreamSize},
+        {"int a; real b = real'({<< 4 {a}});", diag::BadStreamCast},
+        {"int a; shortint b = shortint'({<< 4 {a}});", diag::BadStreamCast},
+        {"typedef struct {byte a[$]; bit b;} dest_t; int a; dest_t b = dest_t'({<<{a}});",
+         diag::BadStreamCast},
+        {"typedef struct {byte a[$]; bit b;} dest_t;int a;dest_t b;assign {>>{b}}={<<{a}};",
+         diag::BadStreamSize},
 
-        { "localparam string s=\"AB\"; localparam byte j= {<<2{s}};", diag::BadStreamSize },
-        { "localparam string s=\"AB\"; localparam int j= byte'({<<{s}}) - 5;",
-          diag::ConstEvalBitstreamCastSize },
-        { "localparam string s=\"AB\"; localparam int j= int'({<<{s}}) - 5;",
-          diag::ConstEvalBitstreamCastSize },
+        {"localparam string s=\"AB\"; localparam byte j= {<<2{s}};", diag::BadStreamSize},
+        {"localparam string s=\"AB\"; localparam int j= byte'({<<{s}}) - 5;",
+         diag::ConstEvalBitstreamCastSize},
+        {"localparam string s=\"AB\"; localparam int j= int'({<<{s}}) - 5;",
+         diag::ConstEvalBitstreamCastSize},
 
-        { "int a,b,c; assign {>>{a,b,c}}=23'b1;", diag::BadStreamSize },
-        { "int a,b,c; int j={>>{a,b,c}};", diag::BadStreamSize },
-        { "int a,b,c; assign {>>{a+b}}=c;", diag::ExpressionNotAssignable },
+        {"int a,b,c; assign {>>{a,b,c}}=23'b1;", diag::BadStreamSize},
+        {"int a,b,c; int j={>>{a,b,c}};", diag::BadStreamSize},
+        {"int a,b,c; assign {>>{a+b}}=c;", diag::ExpressionNotAssignable},
 
-        { R"(
+        {R"(
 function int foo(byte bar[]);
     int a;
     {>>{a}} = bar;
@@ -1491,8 +1515,8 @@ function int foo(byte bar[]);
 endfunction
 localparam t=foo("AB");
 )",
-          diag::BadStreamSize },
-        { R"(
+         diag::BadStreamSize},
+        {R"(
 function int foo(byte bar[]);
     int a;
     {>>{a}} = {<<{bar}};
@@ -1500,38 +1524,38 @@ return a;
 endfunction
 localparam t=foo("ABCDE");
 )",
-          diag::BadStreamSize },
+         diag::BadStreamSize},
 
-        { R"(
+        {R"(
     bit [0:2] c [2:0];
     sub u({>>{c}});
 endmodule
 module sub(output byte b);
 )",
-          diag::BadStreamSize },
+         diag::BadStreamSize},
 
-        { R"(
+        {R"(
     sub u({>>{2}});
 endmodule
 module sub(input bit[3:0] a[0:3]);
 )",
-          diag::BadStreamSize },
+         diag::BadStreamSize},
 
-        { R"(
+        {R"(
     bit [0:1] c [1:0];
     sub u({>>{c}});
 endmodule
 module sub(inout logic[7:0] b);
             )",
-          diag::BadStreamContext },
+         diag::BadStreamContext},
 
-        { R"(
+        {R"(
     byte c [3:0];
     sub u[3:0] ({>>{c}});
 endmodule
 module sub(input byte b);
 )",
-          diag::BadStreamContext },
+         diag::BadStreamContext},
     };
 
     for (const auto& test : illegal) {
@@ -1556,8 +1580,7 @@ module sub(input byte b);
     sub u({<<3{shortint'(100)}}, {>>{c}});
 endmodule
 module sub(input bit[3:0] a[0:3], output byte b);
-)"
-    };
+)"};
 
     for (const auto& test : legal)
         CHECK(testBitstream(test) == 0);
@@ -1568,24 +1591,24 @@ TEST_CASE("Stream expression with") {
         std::string sv;
         DiagCode msg;
     } illegal[] = {
-        { "byte b[4]; int a = {<<3{b with[]}};", diag::ExpectedExpression },
-        { "int a; byte b[4] = {<<3{a with [2]}};", diag::BadStreamWithType },
-        { "byte b[4]; int a = {<<3{b with[0.5]}};", diag::ExprMustBeIntegral },
-        { "byte b[4]; int a = {<<3{b with[{65{1'b1}}]}};", diag::IndexValueInvalid },
-        { "byte b[4]; int a = {<<3{b with[4]}};", diag::IndexValueInvalid },
-        { "byte b[]; int a = {<<3{b with[-1]}};", diag::ValueMustBePositive },
-        { "byte b[4]; int a = {<<3{b with[2-:-1]}};", diag::ValueMustBePositive },
-        { "byte b[4]; int a = {<<3{b with[2+:5]}};", diag::RangeWidthTooLarge },
-        { "byte b[3:0]; int a = {<<3{b with[2+:3]}};", diag::BadRangeExpression },
-        { "byte b[0:3]; int a = {<<3{b with[2:5]}};", diag::IndexValueInvalid },
-        { "byte b[]; int a = {<<3{b with[3:2]}};", diag::SelectEndianMismatch },
-        { "byte b[], c[4]; always {>>{b, {<<3{c with[b[0]:b[1]]}}}} = 9;",
-          diag::BadStreamWithOrder },
-        { "int a[],b[],c[];bit d;assign {>>{b}}={<<{a with [2+:3],c,d}};", diag::BadStreamSize },
+        {"byte b[4]; int a = {<<3{b with[]}};", diag::ExpectedExpression},
+        {"int a; byte b[4] = {<<3{a with [2]}};", diag::BadStreamWithType},
+        {"byte b[4]; int a = {<<3{b with[0.5]}};", diag::ExprMustBeIntegral},
+        {"byte b[4]; int a = {<<3{b with[{65{1'b1}}]}};", diag::IndexOOB},
+        {"byte b[4]; int a = {<<3{b with[4]}};", diag::IndexOOB},
+        {"byte b[4]; int a = {<<3{b with[2-:-1]}};", diag::ValueMustBePositive},
+        {"byte b[4]; logic [39:0] a = {<<3{b with[2+:5]}};", diag::RangeOOB},
+        {"byte b[3:0]; int a = {<<3{b with[2+:3]}};", diag::RangeOOB},
+        {"byte b[0:3]; int a = {<<3{b with[2:5]}};", diag::RangeOOB},
+        {"byte b[]; int a = {<<3{b with[3:2]}};", diag::SelectEndianDynamic},
+        {"byte b[], c[4]; always {>>{b, {<<3{c with[b[0]:b[1]]}}}} = 9;", diag::BadStreamWithOrder},
+        {"int a[],b[],c[];bit d;always {>>{b}}={<<{a with [2+:3],c,d}};", diag::BadStreamSize},
     };
 
-    for (const auto& test : illegal)
-        CHECK(testBitstream(test.sv, test.msg) == 1);
+    for (const auto& test : illegal) {
+        if (testBitstream(test.sv, test.msg) != 1)
+            FAIL_CHECK(test.sv);
+    }
 
     std::string legal[] = {
         R"(
@@ -1600,8 +1623,7 @@ initial begin
     pkt = {<< 8 {i_header, i_len, i_data, i_crc}};
     {<< 8 {o_header, o_len, o_data with [0 +: o_len], o_crc}} = pkt;
 end
-)"
-    };
+)"};
 
     for (const auto& test : legal)
         CHECK(testBitstream(test) == 0);
@@ -1809,7 +1831,6 @@ module m;
         end
 
         a = f;
-        a = f.m;
         b = f;
         b = f.m;
         a.i = 1;
@@ -2166,8 +2187,8 @@ endmodule
     NO_COMPILATION_ERRORS;
 
     auto& root = compilation.getRoot();
-    CHECK(root.lookupName<GenerateBlockSymbol>("m.b1").isInstantiated);
-    CHECK(!root.lookupName<GenerateBlockSymbol>("m.b2").isInstantiated);
+    CHECK(!root.lookupName<GenerateBlockSymbol>("m.b1").isUninstantiated);
+    CHECK(root.lookupName<GenerateBlockSymbol>("m.b2").isUninstantiated);
 
     auto& c = root.lookupName<ParameterSymbol>("m.c");
     CHECK(c.getValue().integer() == 1);
@@ -2643,6 +2664,242 @@ class C;
 endclass
 )");
 
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Bits of non-static var allowed in static init") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+  initial begin
+    automatic int a = 1;
+    static logic [$bits(a)-1:0] b;
+  end
+endmodule
+
+class C;
+    int a;
+    static int b = $bits(a);
+endclass
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("String out-of-bounds accesses") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    localparam string s = "asdf";
+    int i = s[2:3];
+
+    localparam byte j = foo();
+    function byte foo;
+        automatic string t = s;
+        t[11] += 4;
+        return t[12];
+    endfunction
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 3);
+    CHECK(diags[0].code == diag::BadSliceType);
+    CHECK(diags[1].code == diag::ConstEvalDynamicArrayIndex);
+    CHECK(diags[2].code == diag::ConstEvalDynamicArrayIndex);
+}
+
+TEST_CASE("Out-of-bounds element selects in consteval") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    localparam string s[integer] = '{0: "hello", 2: "world"};
+    localparam string t = s[1];
+    localparam logic[6:1] u = 4;
+
+    localparam int i = foo();
+
+    int bar;
+    function automatic int foo;
+        string k = s['x];
+        logic l1 = 'x;
+        byte b = t[l1];
+        int q = 9;
+        logic l2 = u[q];
+
+        k[bar] = 1;
+    endfunction
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 5);
+    CHECK(diags[0].code == diag::ConstEvalAssociativeElementNotFound);
+    CHECK(diags[1].code == diag::ConstEvalAssociativeIndexInvalid);
+    CHECK(diags[2].code == diag::IndexOOB);
+    CHECK(diags[3].code == diag::IndexOOB);
+    CHECK(diags[4].code == diag::ConstEvalFunctionIdentifiersMustBeLocal);
+}
+
+TEST_CASE("Out-of-bounds range selects in consteval") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    string s[integer] = '{0: "hello", 2: "world"};
+    string t = s[2:1];
+
+    real r;
+    logic [7:0] u;
+    logic [1:0] v1 = u[r:0];
+    logic [1:0] v2 = u[0:r];
+    logic [1:0] v3 = u[1:2];
+    logic [1:0] v4 = u[1+:-1];
+    logic [9:0] v5 = u[1+:10];
+    logic [1:0] v6 = u['x+:2];
+    logic [9:0] v7 = u[u+:10];
+
+    int w[];
+    int x1[2] = w[u:1];
+    int x2[2] = w[u+:-1];
+
+    localparam int y[5] = {1,2,3,4,5};
+
+    localparam int i1 = f1();
+    localparam int i2 = f2();
+    localparam int i3 = f3();
+    localparam int i4 = f4();
+    localparam int i5 = f5();
+    localparam int i6 = f6();
+
+    function automatic int f1;
+        int a = -1;
+        int b = y[a+:3][0];
+        w[0:1] = {1,1};
+    endfunction
+
+    function automatic int f2;
+        int c[];
+        c[u+:2] = {1,2};
+    endfunction
+
+    function automatic int f3;
+        integer a = 'x;
+        int c[];
+        c[a+:2] = {1,2};
+    endfunction
+
+    function automatic int f4;
+        integer a = 'x;
+        int c[$];
+        c[2+:a] = {1,2};
+    endfunction
+
+    function automatic int f5;
+        integer a = 'x;
+        int c[3];
+        int d[2] = c[a+:2];
+    endfunction
+
+    function automatic int f6;
+        int c[];
+        int d[20] = c[-10+:20];
+    endfunction
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 17);
+    CHECK(diags[0].code == diag::RangeSelectAssociative);
+    CHECK(diags[1].code == diag::ExprMustBeIntegral);
+    CHECK(diags[2].code == diag::ExprMustBeIntegral);
+    CHECK(diags[3].code == diag::SelectEndianMismatch);
+    CHECK(diags[4].code == diag::ValueMustBePositive);
+    CHECK(diags[5].code == diag::RangeOOB);
+    CHECK(diags[6].code == diag::IndexValueInvalid);
+    CHECK(diags[7].code == diag::RangeWidthOOB);
+    CHECK(diags[8].code == diag::ConstEvalNonConstVariable);
+    CHECK(diags[9].code == diag::ValueMustBePositive);
+    CHECK(diags[10].code == diag::RangeOOB);
+    CHECK(diags[11].code == diag::ConstEvalFunctionIdentifiersMustBeLocal);
+    CHECK(diags[12].code == diag::ConstEvalFunctionIdentifiersMustBeLocal);
+    CHECK(diags[13].code == diag::IndexValueInvalid);
+    CHECK(diags[14].code == diag::IndexValueInvalid);
+    CHECK(diags[15].code == diag::IndexValueInvalid);
+    CHECK(diags[16].code == diag::ConstEvalDynamicArrayRange);
+}
+
+TEST_CASE("Index oob tryEval regress GH #602") {
+    auto tree = SyntaxTree::fromText(R"(
+module top #(
+    parameter [2:0][4:0] IDX_MAP = {5'd1, 5'd3, 5'd4}
+);
+    logic [4:0] sig;
+
+    always_comb begin
+        for (int n = 0; n < 3; n++) begin
+            if (sig[IDX_MAP[n]] != 'h0) begin
+            end
+        end
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Index invalid expression regress GH #675") {
+    auto tree = SyntaxTree::fromText(R"(
+virtual class C #(type enum_t = int);
+    static function enum_t str2enum(string str);
+        static enum_t enum_type_map[string];
+        enum_t e;
+
+        if (enum_type_map.exists(str)) begin
+            e = enum_type_map[str];
+        end else begin
+            e = e.first();
+        end
+
+        return e;
+    endfunction
+endclass
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Proc subroutine multiple driver tracking") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    logic [9:0] a;
+    always_comb begin
+        for (int i = 0; i < $size(a); i++)
+            a[i] = 0;
+        baz();
+        baz();
+    end
+
+    task baz;
+        a[0] = 1;
+    endtask
+endmodule
+)");
+
+    // This tests a crash due to invalidating iterators while
+    // iterating the variable's driver map.
     Compilation compilation;
     compilation.addSyntaxTree(tree);
     NO_COMPILATION_ERRORS;

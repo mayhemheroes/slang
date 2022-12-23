@@ -2,7 +2,8 @@
 //! @file Json.h
 //! @brief Minimal JSON serialization support
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -17,7 +18,7 @@ class FormatBuffer;
 /// This class is simple and has few features; it's expected that you'll
 /// call its methods in the correct order to generate valid JSON. If not,
 /// it will happily spit out unparseable text.
-class JsonWriter {
+class SLANG_EXPORT JsonWriter {
 public:
     JsonWriter();
     ~JsonWriter();

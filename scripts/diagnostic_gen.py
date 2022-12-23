@@ -1,5 +1,9 @@
 #!/usr/bin/env python
 # This script generates C++ code for compiler diagnostics.
+#
+# SPDX-FileCopyrightText: Michael Popoloski
+# SPDX-License-Identifier: MIT
+
 import argparse
 import os
 import shlex
@@ -108,7 +112,8 @@ def createheader(path, subsys, diags):
 //! @file {}Diags.h
 //! @brief Generated diagnostic enums for the {} subsystem
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -138,7 +143,8 @@ def createsource(path, diags, groups):
 // DiagCode.cpp
 // Generated diagnostic helpers
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/diagnostics/AllDiags.h"
 
@@ -258,7 +264,8 @@ def createallheader(path, diags):
 //! @file AllDiags.h
 //! @brief Combined header that includes all subsystem-specific diagnostic headers
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -312,7 +319,6 @@ def createdocs(outDir, inpath, slangBin, diags, groups):
         with open(testPath, "w") as outf:
             outf.write(v[2])
 
-        encoding = "utf-16-le" if os.name == "nt" else "utf-8"
         args = [
             slangBin,
             "--quiet",
@@ -323,7 +329,7 @@ def createdocs(outDir, inpath, slangBin, diags, groups):
         ]
 
         result = subprocess.run(
-            args, encoding=encoding, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
+            args, encoding="utf-8", stdout=subprocess.PIPE, stderr=subprocess.STDOUT
         )
         v[3] = result.stdout
         if k not in v[3]:

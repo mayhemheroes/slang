@@ -2,7 +2,8 @@
 // String.cpp
 // Various string utilities
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/util/String.h"
 
@@ -18,24 +19,24 @@
 namespace slang {
 
 template<typename T>
-void uintToStrImpl(SmallVector<char>& buffer, const char* format, T value) {
+void uintToStrImpl(SmallVectorBase<char>& buffer, const char* format, T value) {
     size_t sz = (size_t)snprintf(nullptr, 0, format, value);
     size_t offset = buffer.size();
-    buffer.extend(sz + 1);
+    buffer.resize(buffer.size() + sz + 1);
 
     snprintf(&buffer[offset], sz + 1, format, value);
-    buffer.pop();
+    buffer.pop_back();
 }
 
-void uintToStr(SmallVector<char>& buffer, uint32_t value) {
+void uintToStr(SmallVectorBase<char>& buffer, uint32_t value) {
     uintToStrImpl(buffer, "%u", value);
 }
 
-void uintToStr(SmallVector<char>& buffer, uint64_t value) {
+void uintToStr(SmallVectorBase<char>& buffer, uint64_t value) {
     uintToStrImpl(buffer, "%lu", value);
 }
 
-optional<int32_t> strToInt(string_view str, size_t* pos, int base) {
+std::optional<int32_t> strToInt(string_view str, size_t* pos, int base) {
     int32_t value;
     auto result = std::from_chars(str.data(), str.data() + str.size(), value, base);
     if (result.ec != std::errc())
@@ -46,7 +47,7 @@ optional<int32_t> strToInt(string_view str, size_t* pos, int base) {
     return value;
 }
 
-optional<uint32_t> strToUInt(string_view str, size_t* pos, int base) {
+std::optional<uint32_t> strToUInt(string_view str, size_t* pos, int base) {
     uint32_t value;
     auto result = std::from_chars(str.data(), str.data() + str.size(), value, base);
     if (result.ec != std::errc())
@@ -58,7 +59,7 @@ optional<uint32_t> strToUInt(string_view str, size_t* pos, int base) {
 }
 
 // TODO: improve this once std::from_chars is available everywhere
-optional<double> strToDouble(string_view str, size_t* pos) {
+std::optional<double> strToDouble(string_view str, size_t* pos) {
     std::string copy(str);
     const char* start = copy.c_str();
 
@@ -74,14 +75,24 @@ optional<double> strToDouble(string_view str, size_t* pos) {
     return val;
 }
 
+void strToUpper(std::string& str) {
+    std::transform(str.begin(), str.end(), str.begin(),
+                   [](unsigned char c) { return (char)std::toupper(c); });
+}
+
+void strToLower(std::string& str) {
+    std::transform(str.begin(), str.end(), str.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
+}
+
 int editDistance(string_view left, string_view right, bool allowReplacements, int maxDistance) {
     // See: http://en.wikipedia.org/wiki/Levenshtein_distance
     size_t m = left.size();
     size_t n = right.size();
 
-    SmallVectorSized<int, 32> row;
+    SmallVector<int, 32> row(n, UninitializedTag());
     for (int i = 0; i <= int(n); i++)
-        row.append(i);
+        row.push_back(i);
 
     for (size_t y = 1; y <= m; y++) {
         row[0] = int(y);

@@ -2,7 +2,8 @@
 //! @file SyntaxPrinter.h
 //! @brief Support for printing syntax nodes and tokens
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -10,24 +11,28 @@
 
 #include "slang/syntax/SyntaxNode.h"
 
-namespace slang {
+namespace slang::syntax {
 
 class SyntaxTree;
 
 /// Provides support for printing tokens, trivia, or whole syntax trees
 /// back to source code.
-class SyntaxPrinter {
+class SLANG_EXPORT SyntaxPrinter {
 public:
     SyntaxPrinter() = default;
     explicit SyntaxPrinter(const SourceManager& sourceManager);
 
+    /// Append raw text to the buffer.
+    /// @return a reference to this object, to allow chaining additional method calls.
+    SyntaxPrinter& append(string_view text);
+
     /// Print the provided @a trivia to the internal buffer.
     /// @return a reference to this object, to allow chaining additional method calls.
-    SyntaxPrinter& print(Trivia trivia);
+    SyntaxPrinter& print(parsing::Trivia trivia);
 
     /// Print the provided @a token to the internal buffer.
     /// @return a reference to this object, to allow chaining additional method calls.
-    SyntaxPrinter& print(Token token);
+    SyntaxPrinter& print(parsing::Token token);
 
     /// Print the provided @a node to the internal buffer.
     /// @return a reference to this object, to allow chaining additional method calls.
@@ -95,8 +100,6 @@ public:
     static std::string printFile(const SyntaxTree& tree);
 
 private:
-    void append(string_view text);
-
     std::string buffer;
     const SourceManager* sourceManager = nullptr;
     bool includeTrivia = true;
@@ -108,4 +111,4 @@ private:
     bool squashNewlines = true;
 };
 
-} // namespace slang
+} // namespace slang::syntax

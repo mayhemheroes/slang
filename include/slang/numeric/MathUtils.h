@@ -2,12 +2,14 @@
 //! @file MathUtils.h
 //! @brief Various math utilities
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
 #include <climits>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 
 #if defined(_MSC_VER)
@@ -19,8 +21,18 @@ namespace slang {
 inline uint32_t clog2(uint64_t value) {
 #if defined(_MSC_VER)
     unsigned long index;
+#    if defined(_M_IX86)
+    if (value >> 32) {
+        _BitScanReverse(&index, (unsigned long)(value >> 32));
+        index += 32;
+    }
+    else if (!_BitScanReverse(&index, (unsigned long)value)) {
+        return 0;
+    }
+#    else
     if (!_BitScanReverse64(&index, value))
         return 0;
+#    endif
     return index + (value & (value - 1) ? 1 : 0);
 #else
     if (value == 0)
@@ -50,9 +62,16 @@ inline uint32_t countLeadingZeros64(uint64_t value) {
     if (value == 0)
         return 64;
 #if defined(_MSC_VER)
+#    if defined(_M_IX86)
+    if (value >> 32)
+        return countLeadingZeros32((unsigned long)(value >> 32));
+    else
+        return countLeadingZeros32((unsigned long)value) + 32;
+#    else
     unsigned long index;
     _BitScanReverse64(&index, value);
     return index ^ 63;
+#    endif
 #else
     return (uint32_t)__builtin_clzll(value);
 #endif
@@ -64,7 +83,11 @@ inline uint32_t countLeadingOnes64(uint64_t value) {
 
 inline uint32_t countPopulation64(uint64_t value) {
 #if defined(_MSC_VER)
+#    if defined(_M_IX86)
+    return __popcnt((unsigned int)value) + __popcnt((unsigned int)(value >> 32));
+#    else
     return (uint32_t)__popcnt64(value);
+#    endif
 #else
     return (uint32_t)__builtin_popcountll(value);
 #endif
@@ -75,8 +98,8 @@ inline uint32_t countPopulation64(uint64_t value) {
 inline std::optional<int32_t> checkedAddS32(int32_t a, int32_t b) {
 #if defined(_MSC_VER)
     int64_t p = int64_t(a) + int64_t(b);
-    bool fits =
-        p >= std::numeric_limits<int32_t>::min() && p <= std::numeric_limits<int32_t>::max();
+    bool fits = p >= std::numeric_limits<int32_t>::min() &&
+                p <= std::numeric_limits<int32_t>::max();
     return fits ? std::make_optional(int32_t(p)) : std::nullopt;
 #else
     int32_t result;
@@ -89,8 +112,8 @@ inline std::optional<int32_t> checkedAddS32(int32_t a, int32_t b) {
 inline std::optional<int32_t> checkedSubS32(int32_t a, int32_t b) {
 #if defined(_MSC_VER)
     int64_t p = int64_t(a) - int64_t(b);
-    bool fits =
-        p >= std::numeric_limits<int32_t>::min() && p <= std::numeric_limits<int32_t>::max();
+    bool fits = p >= std::numeric_limits<int32_t>::min() &&
+                p <= std::numeric_limits<int32_t>::max();
     return fits ? std::make_optional(int32_t(p)) : std::nullopt;
 #else
     int32_t result;

@@ -2,7 +2,8 @@
 //! @file TextDiagnosticClient.h
 //! @brief Diagnostic client that formats to a text string
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -11,13 +12,30 @@
 
 #include "slang/diagnostics/DiagnosticClient.h"
 
+namespace fmt {
+inline namespace v9 {
+enum class terminal_color : uint8_t;
+}
+} // namespace fmt
+
 namespace slang {
 
 class FormatBuffer;
-class Symbol;
 
-class TextDiagnosticClient : public DiagnosticClient {
+namespace ast {
+class Symbol;
+}
+
+class SLANG_EXPORT TextDiagnosticClient : public DiagnosticClient {
 public:
+    fmt::terminal_color noteColor;
+    fmt::terminal_color warningColor;
+    fmt::terminal_color errorColor;
+    fmt::terminal_color fatalColor;
+    fmt::terminal_color highlightColor;
+    fmt::terminal_color filenameColor;
+    fmt::terminal_color locationColor;
+
     TextDiagnosticClient();
     ~TextDiagnosticClient();
 
@@ -40,6 +58,8 @@ public:
         defaultSymbolPathCB = std::forward<TFunc>(func);
     }
 
+    fmt::terminal_color getSeverityColor(DiagnosticSeverity severity) const;
+
     void report(const ReportedDiagnostic& diagnostic) override;
 
     void clear();
@@ -55,7 +75,7 @@ private:
     bool includeExpansion = true;
     bool includeHierarchy = true;
 
-    using SymbolPathCB = std::function<std::string(const Symbol&)>;
+    using SymbolPathCB = std::function<std::string(const ast::Symbol&)>;
     SymbolPathCB symbolPathCB;
     static SymbolPathCB defaultSymbolPathCB;
 

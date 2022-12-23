@@ -2,7 +2,8 @@
 //! @file Lexer.h
 //! @brief Source file lexer
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -17,12 +18,19 @@ namespace slang {
 
 class BumpAllocator;
 
+}
+
+namespace slang::parsing {
+
 /// Contains various options that can control lexing behavior.
-struct LexerOptions {
+struct SLANG_EXPORT LexerOptions {
     /// The maximum number of errors that can occur before the rest of the source
     /// buffer is skipped.
-    uint32_t maxErrors = 64;
+    uint32_t maxErrors = 16;
 };
+
+/// Possible encodings for encrypted text used in a pragma protect region.
+enum class SLANG_EXPORT ProtectEncoding { UUEncode, Base64, QuotedPrintable, Raw };
 
 /// The Lexer is responsible for taking source text and chopping it up into tokens.
 /// Tokens carry along leading "trivia", which is things like whitespace and comments,
@@ -30,7 +38,7 @@ struct LexerOptions {
 ///
 /// There are also helper methods on this class that handle token manipulation on the
 /// character level.
-class Lexer {
+class SLANG_EXPORT Lexer {
 public:
     Lexer(SourceBuffer buffer, BumpAllocator& alloc, Diagnostics& diagnostics,
           LexerOptions options = LexerOptions{});
@@ -43,6 +51,13 @@ public:
     /// This will never return a null pointer; at the end of the buffer,
     /// an infinite stream of EndOfFile tokens will be generated
     Token lex(KeywordVersion keywordVersion = LexerFacts::getDefaultKeywordVersion());
+
+    /// Looks ahead in the source stream to see if the next token we would lex
+    /// is on the same line as the previous token we've lexed.
+    bool isNextTokenOnSameLine();
+
+    /// Lexes a token that contains encoded text as part of a protected envelope.
+    Token lexEncodedText(ProtectEncoding encoding, uint32_t expectedBytes, bool singleLine);
 
     /// Concatenates two tokens together; used for macro pasting.
     static Token concatenateTokens(BumpAllocator& alloc, Token left, Token right);
@@ -61,7 +76,7 @@ public:
     /// portion of the split is lexed into new tokens and appened to @a results
     static void splitTokens(BumpAllocator& alloc, Diagnostics& diagnostics,
                             const SourceManager& sourceManager, Token sourceToken, size_t offset,
-                            KeywordVersion keywordVersion, SmallVector<Token>& results);
+                            KeywordVersion keywordVersion, SmallVectorBase<Token>& results);
 
 private:
     Lexer(BufferID bufferId, string_view source, const char* startPtr, BumpAllocator& alloc,
@@ -75,14 +90,17 @@ private:
     Token lexApostrophe();
 
     Token lexStringLiteral();
-    optional<TimeUnit> lexTimeLiteral();
+    std::optional<TimeUnit> lexTimeLiteral();
 
+    template<bool StopAfterNewline>
     void lexTrivia();
 
     void scanBlockComment();
     void scanLineComment();
     void scanWhitespace();
     void scanIdentifier();
+    bool scanUTF8Char(bool alreadyErrored, uint32_t* code);
+    void scanEncodedText(ProtectEncoding encoding, uint32_t expectedBytes, bool singleLine);
 
     template<typename... Args>
     Token create(TokenKind kind, Args&&... args);
@@ -94,16 +112,16 @@ private:
     void mark() { marker = sourceBuffer; }
     void advance() { sourceBuffer++; }
     void advance(int count) { sourceBuffer += count; }
-    char peek() { return *sourceBuffer; }
-    char peek(int offset) { return sourceBuffer[offset]; }
-    size_t currentOffset();
+    char peek() const { return *sourceBuffer; }
+    char peek(int offset) const { return sourceBuffer[offset]; }
+    size_t currentOffset() const;
 
     // in order to detect embedded nulls gracefully, we call this whenever we
     // encounter a null to check whether we really are at the end of the buffer
-    bool reallyAtEnd() { return sourceBuffer >= sourceEnd - 1; }
+    bool reallyAtEnd() const { return sourceBuffer >= sourceEnd - 1; }
 
-    uint32_t lexemeLength() { return (uint32_t)(sourceBuffer - marker); }
-    string_view lexeme() { return string_view(marker, lexemeLength()); }
+    uint32_t lexemeLength() const { return (uint32_t)(sourceBuffer - marker); }
+    string_view lexeme() const { return string_view(marker, lexemeLength()); }
 
     bool consume(char c) {
         if (peek() == c) {
@@ -130,7 +148,10 @@ private:
     uint32_t errorCount = 0;
 
     // temporary storage for building arrays of trivia
-    SmallVectorSized<Trivia, 32> triviaBuffer;
+    SmallVector<Trivia, 32> triviaBuffer;
+
+    // temporary storage for building string literals
+    SmallVector<char> stringBuffer;
 };
 
-} // namespace slang
+} // namespace slang::parsing

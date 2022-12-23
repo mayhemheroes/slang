@@ -3,7 +3,8 @@
 // Simple tool that parses an input file and writes it back out; used
 // for verifying the round-trip nature of the parse tree.
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 
 #include <cstdio>
@@ -18,6 +19,7 @@
 #include "slang/syntax/SyntaxTree.h"
 
 using namespace slang;
+using namespace slang::syntax;
 
 int main(int argc, char** argv) try {
     if (argc != 2) {

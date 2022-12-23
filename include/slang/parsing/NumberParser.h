@@ -2,7 +2,8 @@
 //! @file NumberParser.h
 //! @brief Helper type to parse numeric literals
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -14,7 +15,7 @@
 #include "slang/text/SourceLocation.h"
 #include "slang/util/SmallVector.h"
 
-namespace slang {
+namespace slang::parsing {
 
 class NumberParser {
 public:
@@ -26,22 +27,22 @@ public:
         Token value;
         bool isSimple = true;
 
-        static IntResult simple(Token value) { return { Token(), Token(), value, true }; }
+        static IntResult simple(Token value) { return {Token(), Token(), value, true}; }
 
         static IntResult vector(Token size, Token base, Token value) {
-            return { size, base, value, false };
+            return {size, base, value, false};
         }
     };
 
     template<typename TStream>
     IntResult parseSimpleInt(TStream& stream) {
-        auto token = stream.consume();
+        auto token = stream.expect(TokenKind::IntegerLiteral);
         if (token.intValue() > INT32_MAX)
             reportIntOverflow(token);
         return IntResult::simple(token);
     }
 
-    template<typename TStream>
+    template<typename TStream, bool RequireSameLine = false>
     IntResult parseInteger(TStream& stream) {
         Token sizeToken;
         Token baseToken;
@@ -52,21 +53,34 @@ public:
             startVector(baseToken, Token());
         }
         else {
-            if (!stream.peek(TokenKind::IntegerBase)) {
+            auto createSimple = [&] {
                 if (token.intValue() > INT32_MAX)
                     reportIntOverflow(token);
                 return IntResult::simple(token);
+            };
+
+            if constexpr (RequireSameLine) {
+                if (!stream.peekSameLine())
+                    return createSimple();
             }
+
+            if (!stream.peek(TokenKind::IntegerBase))
+                return createSimple();
 
             sizeToken = token;
             baseToken = stream.consume();
             startVector(baseToken, sizeToken);
         }
 
+        if constexpr (RequireSameLine) {
+            if (!stream.peekSameLine())
+                return reportMissingDigits(sizeToken, baseToken, Token());
+        }
+
         // At this point we expect to see vector digits, but they could be split out into other
         // token types because of hex literals.
         auto first = stream.peek();
-        if (!SyntaxFacts::isPossibleVectorDigit(first.kind))
+        if (!syntax::SyntaxFacts::isPossibleVectorDigit(first.kind))
             return reportMissingDigits(sizeToken, baseToken, first);
 
         int count = 0;
@@ -91,8 +105,13 @@ public:
                 break;
             }
 
+            if constexpr (RequireSameLine) {
+                if (!stream.peekSameLine())
+                    break;
+            }
+
             next = stream.peek();
-        } while (SyntaxFacts::isPossibleVectorDigit(next.kind) && next.trivia().empty());
+        } while (syntax::SyntaxFacts::isPossibleVectorDigit(next.kind) && next.trivia().empty());
 
         return IntResult::vector(sizeToken, baseToken, finishValue(first, count == 1));
     }
@@ -133,8 +152,8 @@ private:
     SVInt decimalValue;
     Diagnostics& diagnostics;
     BumpAllocator& alloc;
-    SmallVectorSized<logic_t, 16> digits;
-    SmallVectorSized<char, 64> text;
+    SmallVector<logic_t> digits;
+    SmallVector<char> text;
 };
 
-} // namespace slang
+} // namespace slang::parsing

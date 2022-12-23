@@ -1,9 +1,12 @@
-#include "../source/text/CharInfo.h"
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
 #include "slang/parsing/Preprocessor.h"
 #include "slang/syntax/AllSyntax.h"
 #include "slang/syntax/SyntaxPrinter.h"
+#include "slang/text/CharInfo.h"
 #include "slang/text/SourceManager.h"
 
 using LF = LexerFacts;
@@ -28,10 +31,19 @@ TEST_CASE("UTF8 chars") {
     CHECK(diagnostics.back().code == diag::UTF8Char);
 }
 
+TEST_CASE("Invalid UTF8 chars") {
+    auto& text = "// asdf \xed\xa0\x80\xed\xa0\x80 asdf";
+    Token token = lexToken(text);
+
+    CHECK(token.kind == TokenKind::EndOfFile);
+    CHECK(token.toString() == text);
+    REQUIRE(!diagnostics.empty());
+    CHECK(diagnostics.back().code == diag::InvalidUTF8Seq);
+}
+
 TEST_CASE("Unicode BOMs") {
     lexToken("\xEF\xBB\xBF ");
-    REQUIRE(!diagnostics.empty());
-    CHECK(diagnostics.back().code == diag::UnicodeBOM);
+    REQUIRE(diagnostics.empty());
 
     lexToken("\xFE\xFF ");
     REQUIRE(!diagnostics.empty());
@@ -101,6 +113,19 @@ TEST_CASE("Line Comment (embedded null)") {
     CHECK(diagnostics.back().code == diag::EmbeddedNull);
 }
 
+TEST_CASE("Line Comment (UTF8)") {
+    const char text[] = "// foo 的氣墊船\u00F7\n";
+    auto str = std::string(text, text + sizeof(text) - 1);
+    Token token = lexToken(string_view(str));
+
+    CHECK(token.kind == TokenKind::EndOfFile);
+    CHECK(token.toString() == str);
+    CHECK(token.trivia().size() == 2);
+    CHECK(token.trivia()[0].kind == TriviaKind::LineComment);
+    CHECK(token.trivia()[1].kind == TriviaKind::EndOfLine);
+    REQUIRE(diagnostics.empty());
+}
+
 TEST_CASE("Block Comment (one line)") {
     auto& text = "/* comment */";
     Token token = lexToken(text);
@@ -150,6 +175,18 @@ TEST_CASE("Block comment (embedded null)") {
     CHECK(token.trivia()[0].kind == TriviaKind::BlockComment);
     REQUIRE(!diagnostics.empty());
     CHECK(diagnostics.back().code == diag::EmbeddedNull);
+}
+
+TEST_CASE("Block comment (UTF8 text)") {
+    const char text[] = u8"/* foo 的氣墊船 */";
+    auto str = std::string(text, text + sizeof(text) - 1);
+    Token token = lexToken(string_view(str));
+
+    CHECK(token.kind == TokenKind::EndOfFile);
+    CHECK(token.toString() == str);
+    CHECK(token.trivia().size() == 1);
+    CHECK(token.trivia()[0].kind == TriviaKind::BlockComment);
+    REQUIRE(diagnostics.empty());
 }
 
 TEST_CASE("Block Comment (nested)") {
@@ -403,6 +440,30 @@ TEST_CASE("String literal (nonstandard escape)") {
     CHECK(token.valueText() == "literal%");
     REQUIRE(!diagnostics.empty());
     CHECK(diagnostics.back().code == diag::NonstandardEscapeCode);
+}
+
+TEST_CASE("String literal (null escape)") {
+    auto& text = "\"literal\\\0\"";
+    auto str = std::string(text, text + sizeof(text) - 1);
+    Token token = lexToken(str);
+
+    CHECK(token.kind == TokenKind::StringLiteral);
+    CHECK(token.toString() == str);
+    CHECK(token.valueText() == "literal");
+    REQUIRE(!diagnostics.empty());
+    CHECK(diagnostics.back().code == diag::EmbeddedNull);
+}
+
+TEST_CASE("String literal (UTF8 escape)") {
+    auto& text = "\"literal\\\U0001f34c\"";
+    auto str = std::string(text, text + sizeof(text) - 1);
+    Token token = lexToken(str);
+
+    CHECK(token.kind == TokenKind::StringLiteral);
+    CHECK(token.toString() == str);
+    CHECK(token.valueText() == "literal\U0001f34c");
+    REQUIRE(!diagnostics.empty());
+    CHECK(diagnostics.back().code == diag::UnknownEscapeCode);
 }
 
 TEST_CASE("Integer literal") {
@@ -1139,20 +1200,7 @@ void testExpect(TokenKind kind) {
 TEST_CASE("Missing / expected tokens") {
     testExpect(TokenKind::IncludeFileName);
     testExpect(TokenKind::StringLiteral);
-    testExpect(TokenKind::Directive);
-    testExpect(TokenKind::MacroUsage);
     testExpect(TokenKind::IntegerLiteral);
-    testExpect(TokenKind::IntegerBase);
-    testExpect(TokenKind::UnbasedUnsizedLiteral);
-    testExpect(TokenKind::RealLiteral);
     testExpect(TokenKind::TimeLiteral);
     testExpect(TokenKind::WithKeyword);
-}
-
-TEST_CASE("Test text utilities") {
-    CHECK(utf8SeqBytes(63) == 0);
-    CHECK(utf8SeqBytes('\xc1') == 1);
-    CHECK(utf8SeqBytes('\xe0') == 2);
-    CHECK(utf8SeqBytes('\xf0') == 3);
-    CHECK(utf8SeqBytes('\xff') == 0);
 }

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 #include <catch2/catch_approx.hpp>
 #include <sstream>
@@ -459,6 +462,11 @@ TEST_CASE("Power") {
     v = v.pow(1234).slice(9000000, 8994500);
     CHECK(v == "5500'd64053931454776197655165648478290003146695"_si);
 #endif
+
+    // Test optimization of 2**y.
+    SVInt z = SVInt(999, 2, false).pow("934'd934"_si);
+    CHECK(z.countOnes() == 1);
+    CHECK(z.lshr(934) == 1);
 }
 
 TEST_CASE("Shifting") {
@@ -571,9 +579,8 @@ TEST_CASE("Slicing") {
              .shl(16777000) +
          "16777215'd1234"_si.shl(16777206))
             .slice(16777214, 16777000);
-    CHECK(v3.toString(LiteralBase::Decimal) ==
-          "215'd47111210086086240918128115148156713906029950526455712219410726911");
-    CHECK(v3.toString(LiteralBase::Hex) ==
+    CHECK(v3.toString(LiteralBase::Decimal) == "215'd47111210086086240918128115148156713906...e27");
+    CHECK(v3.toString(LiteralBase::Hex, true) ==
           "215'h728560c56c16d0b0be23da38038624767fffffffffffffffffffff");
 
     SVInt v4 =
@@ -581,7 +588,7 @@ TEST_CASE("Slicing") {
             .shl(16777000) +
         "16777215'd1234"_si.shl(16777206);
     v4.set(16777001, 16777000, "2'b01"_si);
-    CHECK(v4.slice(16777214, 16777000).toString(LiteralBase::Hex) ==
+    CHECK(v4.slice(16777214, 16777000).toString(LiteralBase::Hex, true) ==
           "215'h728560c56c16d0b0be23da38038624767ffffffffffffffffffffd");
 }
 

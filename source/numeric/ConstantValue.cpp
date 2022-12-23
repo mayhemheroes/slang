@@ -2,12 +2,13 @@
 // ConstantValue.cpp
 // Compile-time constant representation
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/numeric/ConstantValue.h"
 
 #include "../text/FormatBuffer.h"
-#include <fmt/format.h>
+#include <ostream>
 
 #include "slang/util/Hash.h"
 
@@ -18,14 +19,15 @@ struct always_false : std::false_type {};
 
 const ConstantValue ConstantValue::Invalid;
 
-std::string ConstantValue::toString() const {
+std::string ConstantValue::toString(bitwidth_t abbreviateThresholdBits, bool exactUnknowns,
+                                    bool useAssignmentPatterns) const {
     return std::visit(
-        [](auto&& arg) {
+        [abbreviateThresholdBits, exactUnknowns, useAssignmentPatterns](auto&& arg) {
             using T = std::decay_t<decltype(arg)>;
             if constexpr (std::is_same_v<T, std::monostate>)
                 return "<unset>"s;
             else if constexpr (std::is_same_v<T, SVInt>)
-                return arg.toString();
+                return arg.toString(abbreviateThresholdBits, exactUnknowns);
             else if constexpr (std::is_same_v<T, real_t>)
                 return fmt::format("{}", double(arg));
             else if constexpr (std::is_same_v<T, shortreal_t>)
@@ -36,51 +38,61 @@ std::string ConstantValue::toString() const {
                 return "$"s;
             else if constexpr (std::is_same_v<T, Elements>) {
                 FormatBuffer buffer;
-                buffer.append("[");
+                buffer.append(useAssignmentPatterns ? "'{"sv : "["sv);
                 for (auto& element : arg) {
-                    buffer.append(element.toString());
+                    buffer.append(element.toString(abbreviateThresholdBits, exactUnknowns,
+                                                   useAssignmentPatterns));
                     buffer.append(",");
                 }
 
                 if (!arg.empty())
                     buffer.pop_back();
-                buffer.append("]");
+                buffer.append(useAssignmentPatterns ? "}"sv : "]"sv);
                 return buffer.str();
             }
             else if constexpr (std::is_same_v<T, std::string>)
                 return fmt::format("\"{}\"", arg);
             else if constexpr (std::is_same_v<T, Map>) {
                 FormatBuffer buffer;
-                buffer.append("[");
+                buffer.append(useAssignmentPatterns ? "'{"sv : "["sv);
                 for (auto& [key, val] : *arg)
-                    buffer.format("{}:{},", key.toString(), val.toString());
+                    buffer.format("{}:{},",
+                                  key.toString(abbreviateThresholdBits, exactUnknowns,
+                                               useAssignmentPatterns),
+                                  val.toString(abbreviateThresholdBits, exactUnknowns,
+                                               useAssignmentPatterns));
 
                 if (arg->defaultValue)
-                    buffer.format("default:{}", arg->defaultValue.toString());
+                    buffer.format("default:{}",
+                                  arg->defaultValue.toString(abbreviateThresholdBits, exactUnknowns,
+                                                             useAssignmentPatterns));
                 else if (!arg->empty())
                     buffer.pop_back();
 
-                buffer.append("]");
+                buffer.append(useAssignmentPatterns ? "}"sv : "]"sv);
                 return buffer.str();
             }
             else if constexpr (std::is_same_v<T, Queue>) {
                 FormatBuffer buffer;
-                buffer.append("[");
+                buffer.append(useAssignmentPatterns ? "'{"sv : "["sv);
                 for (auto& element : *arg) {
-                    buffer.append(element.toString());
+                    buffer.append(element.toString(abbreviateThresholdBits, exactUnknowns,
+                                                   useAssignmentPatterns));
                     buffer.append(",");
                 }
 
                 if (!arg->empty())
                     buffer.pop_back();
-                buffer.append("]");
+                buffer.append(useAssignmentPatterns ? "}"sv : "]"sv);
                 return buffer.str();
             }
             else if constexpr (std::is_same_v<T, Union>) {
                 if (!arg->activeMember)
                     return "(unset)"s;
 
-                return fmt::format("({}) {}", *arg->activeMember, arg->value.toString());
+                return fmt::format("({}) {}", *arg->activeMember,
+                                   arg->value.toString(abbreviateThresholdBits, exactUnknowns,
+                                                       useAssignmentPatterns));
             }
             else {
                 static_assert(always_false<T>::value, "Missing case");
@@ -152,6 +164,8 @@ size_t ConstantValue::size() const {
                 return arg->size();
             else if constexpr (std::is_same_v<T, Queue>)
                 return arg->size();
+            else if constexpr (std::is_same_v<T, std::string>)
+                return arg.size();
             else
                 return size_t(0);
         },
@@ -167,7 +181,7 @@ ConstantValue& ConstantValue::at(size_t index) {
             else if constexpr (std::is_same_v<T, Queue>)
                 return arg->at(index);
             else
-                THROW_UNREACHABLE;
+                ASSUME_UNREACHABLE;
         },
         value);
 }
@@ -181,7 +195,7 @@ const ConstantValue& ConstantValue::at(size_t index) const {
             else if constexpr (std::is_same_v<T, Queue>)
                 return arg->at(index);
             else
-                THROW_UNREACHABLE;
+                ASSUME_UNREACHABLE;
         },
         value);
 }
@@ -193,7 +207,7 @@ ConstantValue ConstantValue::getSlice(int32_t upper, int32_t lower,
 
     if (isUnpacked()) {
         span<const ConstantValue> elems = elements();
-        std::vector<ConstantValue> result{ size_t(upper - lower + 1) };
+        std::vector<ConstantValue> result{size_t(upper - lower + 1)};
         ConstantValue* dest = result.data();
 
         for (int32_t i = lower; i <= upper; i++) {
@@ -326,10 +340,10 @@ ConstantValue ConstantValue::convertToInt(bitwidth_t width, bool isSigned, bool 
         return SVInt::fromFloat(width, shortReal(), isSigned);
 
     if (isString()) {
-        SmallVectorSized<byte, 8> buffer;
+        SmallVector<byte, 8> buffer;
         auto& s = str();
         for (auto it = s.rbegin(); it != s.rend(); it++)
-            buffer.append(static_cast<byte>(*it));
+            buffer.push_back(static_cast<byte>(*it));
 
         SVInt result(width, buffer, isSigned);
         if (!isFourState)
@@ -692,7 +706,7 @@ CVIterator begin(ConstantValue& cv) {
                 return arg->begin();
             }
             else {
-                THROW_UNREACHABLE;
+                ASSUME_UNREACHABLE;
             }
         },
         cv.getVariant());
@@ -710,7 +724,7 @@ CVIterator end(ConstantValue& cv) {
                 return arg->end();
             }
             else {
-                THROW_UNREACHABLE;
+                ASSUME_UNREACHABLE;
             }
         },
         cv.getVariant());
@@ -728,7 +742,7 @@ CVConstIterator begin(const ConstantValue& cv) {
                 return arg->begin();
             }
             else {
-                THROW_UNREACHABLE;
+                ASSUME_UNREACHABLE;
             }
         },
         cv.getVariant());
@@ -746,7 +760,7 @@ CVConstIterator end(const ConstantValue& cv) {
                 return arg->end();
             }
             else {
-                THROW_UNREACHABLE;
+                ASSUME_UNREACHABLE;
             }
         },
         cv.getVariant());
@@ -780,14 +794,14 @@ bool ConstantRange::overlaps(ConstantRange other) const {
     return lower() <= other.upper() && upper() >= other.lower();
 }
 
-ConstantRange ConstantRange::getIndexedRange(int32_t l, int32_t r, bool littleEndian,
-                                             bool indexedUp) {
+std::optional<ConstantRange> ConstantRange::getIndexedRange(int32_t l, int32_t r, bool littleEndian,
+                                                            bool indexedUp) {
     ConstantRange result;
     int32_t count = r - 1;
     if (indexedUp) {
         auto upper = checkedAddS32(l, count);
         if (!upper)
-            upper = INT32_MAX;
+            return std::nullopt;
 
         result.left = *upper;
         result.right = l;
@@ -795,7 +809,7 @@ ConstantRange ConstantRange::getIndexedRange(int32_t l, int32_t r, bool littleEn
     else {
         auto lower = checkedSubS32(l, count);
         if (!lower)
-            lower = INT32_MIN;
+            return std::nullopt;
 
         result.left = l;
         result.right = *lower;

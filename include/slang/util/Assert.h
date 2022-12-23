@@ -2,11 +2,14 @@
 //! @file Assert.h
 //! @brief Contains assert-related utilities
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
 #include <stdexcept>
+
+#include "slang/slang_export.h"
 
 #if !defined(ASSERT_ENABLED)
 #    if !defined(NDEBUG)
@@ -30,16 +33,25 @@
                 slang::assert::assertFailed(#cond, __FILE__, __LINE__, ASSERT_FUNCTION); \
         } while (false)
 
+#    define ASSUME_UNREACHABLE                                                                 \
+        throw std::logic_error(std::string(__FILE__) + ":" + std::to_string(__LINE__) + ": " + \
+                               "Default case should be unreachable!")
+
 #else
 #    define ASSERT(cond)        \
         do {                    \
             (void)sizeof(cond); \
         } while (false)
-#endif
 
-#define THROW_UNREACHABLE                                                                  \
-    throw std::logic_error(std::string(__FILE__) + ":" + std::to_string(__LINE__) + ": " + \
-                           "Default case should be unreachable!")
+#    if defined(__GNUC__) || defined(__clang__)
+#        define ASSUME_UNREACHABLE __builtin_unreachable()
+#    elif defined(_MSC_VER)
+#        define ASSUME_UNREACHABLE __assume(false)
+#    else
+#        define ASSUME_UNREACHABLE
+#    endif
+
+#endif
 
 // Compiler-specific macros for warnings and suppressions
 #ifdef __clang__
@@ -51,13 +63,14 @@
 namespace slang::assert {
 
 /// An exception thrown when an ASSERT condition fails.
-class AssertionException : public std::logic_error {
+class SLANG_EXPORT AssertionException : public std::logic_error {
 public:
     AssertionException(const std::string& message) : std::logic_error(message) {}
 };
 
 /// A handler that runs when an ASSERT condition fails; it will unconditionally
 /// thrown an exception.
-[[noreturn]] void assertFailed(const char* expr, const char* file, int line, const char* func);
+[[noreturn]] SLANG_EXPORT void assertFailed(const char* expr, const char* file, int line,
+                                            const char* func);
 
 } // namespace slang::assert

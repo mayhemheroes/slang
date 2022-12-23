@@ -1148,6 +1148,12 @@ NamedBlockClause? blockName
 kindmap<ModuleDeclaration>
 ModuleDeclaration InterfaceDeclaration ProgramDeclaration PackageDeclaration
 
+AnonymousProgram base=Member
+token keyword
+token semi
+list<Member> members
+token endkeyword
+
 // ----- MEMBERS -----
 
 EmptyMember base=Member
@@ -1548,7 +1554,11 @@ NamedBlockClause? endBlockName
 SpecparamDeclarator
 token name
 token equals
-Expression value
+token openParen
+Expression value1
+token comma
+Expression? value2
+token closeParen
 
 SpecparamDeclaration base=Member
 token keyword
@@ -1618,25 +1628,18 @@ token openBracket
 separated_list<EdgeDescriptor> descriptors
 token closeBracket
 
-TimingCheckCondition
+TimingCheckEventCondition
 token tripleAnd
 Expression expr
 
-TimingCheckEvent base=TimingCheckArg
+TimingCheckEventArg base=TimingCheckArg
 token edge
 EdgeControlSpecifier? controlSpecifier
-Name terminal
-TimingCheckCondition? condition
-
-DelayedTerminalArg base=TimingCheckArg
-token terminal
-token openBracket
-Expression expr
-token closeBracket
+Expression terminal
+TimingCheckEventCondition? condition
 
 ExpressionTimingCheckArg base=TimingCheckArg
 Expression expr
-TimingCheckCondition? condition
 
 SystemTimingCheck base=Member
 token name

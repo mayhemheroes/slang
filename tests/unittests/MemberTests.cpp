@@ -1,23 +1,26 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
-#include "slang/binding/AssignmentExpressions.h"
-#include "slang/binding/CallExpression.h"
-#include "slang/binding/OperatorExpressions.h"
-#include "slang/binding/Statements.h"
-#include "slang/compilation/Definition.h"
-#include "slang/symbols/ASTSerializer.h"
-#include "slang/symbols/AttributeSymbol.h"
-#include "slang/symbols/BlockSymbols.h"
-#include "slang/symbols/CompilationUnitSymbols.h"
-#include "slang/symbols/InstanceSymbols.h"
-#include "slang/symbols/MemberSymbols.h"
-#include "slang/symbols/ParameterSymbols.h"
-#include "slang/symbols/PortSymbols.h"
-#include "slang/symbols/SubroutineSymbols.h"
-#include "slang/symbols/VariableSymbols.h"
+#include "slang/ast/ASTSerializer.h"
+#include "slang/ast/Definition.h"
+#include "slang/ast/Statements.h"
+#include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/CallExpression.h"
+#include "slang/ast/expressions/OperatorExpressions.h"
+#include "slang/ast/symbols/AttributeSymbol.h"
+#include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/PortSymbols.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/NetType.h"
+#include "slang/ast/types/Type.h"
 #include "slang/text/Json.h"
-#include "slang/types/NetType.h"
-#include "slang/types/Type.h"
 
 TEST_CASE("Nets") {
     auto tree = SyntaxTree::fromText(R"(
@@ -393,6 +396,10 @@ endmodule
                 "lifetime": "Automatic",
                 "visibility": "Public"
               }
+            ],
+            "isAbstract": false,
+            "isInterface": false,
+            "implements": [
             ]
           },
           {
@@ -407,6 +414,98 @@ endmodule
           }
         ],
         "definition": "test_enum"
+      },
+      "connections": [
+      ]
+    }
+  ]
+})");
+}
+
+TEST_CASE("JSON dump -- attributes") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    wire dog, cat;
+    (* special *) assign dog = cat;
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+
+    JsonWriter writer;
+    writer.setPrettyPrint(true);
+
+    ASTSerializer serializer(compilation, writer);
+    serializer.setIncludeAddresses(false);
+    serializer.serialize(compilation.getRoot());
+
+    std::string result = "\n"s + std::string(writer.view());
+    CHECK(result == R"(
+{
+  "name": "$root",
+  "kind": "Root",
+  "members": [
+    {
+      "name": "",
+      "kind": "CompilationUnit"
+    },
+    {
+      "name": "m",
+      "kind": "Instance",
+      "body": {
+        "name": "m",
+        "kind": "InstanceBody",
+        "members": [
+          {
+            "name": "dog",
+            "kind": "Net",
+            "type": "logic",
+            "netType": {
+              "name": "wire",
+              "kind": "NetType",
+              "type": "logic"
+            }
+          },
+          {
+            "name": "cat",
+            "kind": "Net",
+            "type": "logic",
+            "netType": {
+              "name": "wire",
+              "kind": "NetType",
+              "type": "logic"
+            }
+          },
+          {
+            "name": "",
+            "kind": "ContinuousAssign",
+            "attributes": [
+              {
+                "name": "special",
+                "kind": "Attribute",
+                "value": "1'b1"
+              }
+            ],
+            "assignment": {
+              "kind": "Assignment",
+              "type": "logic",
+              "left": {
+                "kind": "NamedValue",
+                "type": "logic",
+                "symbol": "dog"
+              },
+              "right": {
+                "kind": "NamedValue",
+                "type": "logic",
+                "symbol": "cat"
+              },
+              "isNonBlocking": false
+            }
+          }
+        ],
+        "definition": "m"
       },
       "connections": [
       ]
@@ -1604,6 +1703,7 @@ module m;
 
     specify
         specparam s4 = 2:3:4;
+        specparam s5 = j;
     endspecify
 
     int k = s4;
@@ -1614,8 +1714,9 @@ endmodule
     compilation.addSyntaxTree(tree);
 
     auto& diags = compilation.getAllDiagnostics();
-    REQUIRE(diags.size() == 1);
+    REQUIRE(diags.size() == 2);
     CHECK(diags[0].code == diag::SpecparamInConstant);
+    CHECK(diags[1].code == diag::SpecifyBlockParam);
 }
 
 TEST_CASE("user-defined primitives") {
@@ -1747,7 +1848,7 @@ endprimitive
     REQUIRE(diags.size() == 20);
     CHECK(diags[0].code == diag::PrimitiveOutputFirst);
     CHECK(diags[1].code == diag::PrimitiveAnsiMix);
-    CHECK(diags[2].code == diag::Redefinition);
+    CHECK(diags[2].code == diag::DuplicateDefinition);
     CHECK(diags[3].code == diag::PrimitiveTwoPorts);
     CHECK(diags[4].code == diag::PrimitivePortDup);
     CHECK(diags[5].code == diag::PrimitiveRegDup);
@@ -2204,7 +2305,7 @@ endmodule
 TEST_CASE("Hierarchical path strings") {
     auto tree = SyntaxTree::fromText(R"(
 module top;
-    m m1 [4][2:0][3:4] ();
+    m m1 [4][6:1][3:4] ();
 endmodule
 
 module m;
@@ -2884,4 +2985,417 @@ endmodule
     CHECK(diags[8].code == diag::DupInterfaceExternMethod);
     CHECK(diags[9].code == diag::NotAnInterfaceOrPort);
     CHECK(diags[10].code == diag::NotAnInterfaceOrPort);
+}
+
+TEST_CASE("Specify path descriptions") {
+    auto tree = SyntaxTree::fromText(R"(
+module m(input a, [8:0] C, output b, Q);
+    specify
+        (a +*> b) = 1;
+
+        (C[0] => Q) = 20;
+        (C[1] => Q) = 10:14:20;
+
+        // two expressions specify rise and fall delays
+        specparam tPLH1 = 12, tPHL1 = 25;
+        specparam tPLH2 = 12:16:22, tPHL2 = 16:22:25;
+        (C[2] => Q) = ( tPLH1, tPHL1 ) ;
+        (C[3] => Q) = ( tPLH2, tPHL2 ) ;
+    endspecify
+endmodule
+
+module n(input [7:4] C, output Q);
+    specify
+        // three expressions specify rise, fall, and z transition delays
+        specparam tPLH1 = 12, tPHL1 = 22, tPz1 = 34;
+        specparam tPLH2 = 12:14:30, tPHL2 = 16:22:40, tPz2 = 22:30:34;
+        (C[4] -=> (Q+:1)) = (tPLH1, tPHL1, tPz1);
+        (C[5] => (Q-:1)) = (tPLH2, tPHL2, tPz2);
+
+        // six expressions specify transitions to/from 0, 1, and z
+        specparam t01 = 12, t10 = 16, t0z = 13,
+                  tz1 = 10, t1z = 14, tz0 = 34 ;
+        (C[6] => Q) = ( t01, t10, t0z, tz1, t1z, tz0) ;
+        specparam T01 = 12:14:24, T10 = 16:18:20, T0z = 13:16:30 ;
+        specparam Tz1 = 10:12:16, T1z = 14:23:36, Tz0 = 15:19:34 ;
+        (C[7] => Q) = ( T01, T10, T0z, Tz1, T1z, Tz0) ;
+    endspecify
+endmodule
+
+module o(input C, output Q);
+    specify
+        // twelve expressions specify all transition delays explicitly
+        specparam t01=10, t10=12, t0z=14, tz1=15, t1z=29, tz0=36,
+                  t0x=14, tx1=15, t1x=15, tx0=14, txz=20, tzx=30 ;
+        (C => Q) = (t01, t10, t0z, tz1, t1z, tz0,
+                    t0x, tx1, t1x, tx0, txz, tzx) ;
+    endspecify
+endmodule
+
+module XORgate (a, b, out);
+    input a, b;
+    output out;
+
+    xor x1 (out, a, b);
+
+    specify
+        specparam noninvrise = 1, noninvfall = 2;
+        specparam invertrise = 3, invertfall = 4;
+        if (a) (b => out) = (invertrise, invertfall);
+        if (b) (a => out) = (invertrise, invertfall);
+        if (~a)(b => out) = (noninvrise, noninvfall);
+        if (~b)(a => out) = (noninvrise, noninvfall);
+        ifnone (b => out) = (1, 0);
+    endspecify
+endmodule
+
+module ALU (o1, i1, i2, opcode);
+    input [7:0] i1, i2;
+    input [2:1] opcode;
+    output [7:0] o1;
+
+    specify
+        specparam s1 = 2;
+        if (opcode == 2'b00) (i1,i2 *> o1) = (25.0, 25.0);
+        if (opcode == 2'b01) (i1 => o1) = (5.6, 8.0);
+        if (opcode == s1) (i2 => o1) = (5.6, 8.0);
+        (opcode *> o1) = (6.1, 6.5);
+    endspecify
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Specify path errors") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    int i;
+    modport m(input i);
+endinterface
+
+int k;
+
+module m(input [4:0] a, output [4:0] b, z[6], output [5:0] l, I.m foo, I bar);
+    localparam int c = 1;
+    struct packed { logic a; logic b; } d;
+    logic [1:0][1:0] e;
+    real f;
+    int g;
+    event ev;
+
+    specify
+        (a +*> c) = 1;
+        (a[0+:1] *> b[0]) = 1;
+        (d.a *> b) = 1;
+        (e[0][1] *> b) = 1;
+        (f *> b) = 1;
+        (g *> b) = 1;
+        (a *> foo.i) = 1;
+        (a *> bar.i) = 1;
+        (a *> k) = 1;
+        (a => l) = 1;
+        (a => z[0]) = ev;
+
+        if (k < 2) (a => z[1]) = 1;
+        if (1 < 2) (a => z[2]) = 1;
+        if (int'(g) == 1) (a => z[3]) = 1;
+        if (+g == 1) (a => z[4]) = 1;
+        if (g inside { 1, 2 }) (a => z[5]) = 1;
+
+        (b => a) = 1;
+    endspecify
+endmodule
+
+module n;
+    I foo(), bar();
+    logic [4:0] a,b,z[6];
+    logic [5:0] l;
+    m m1(.*);
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 17);
+    CHECK(diags[0].code == diag::InvalidSpecifyDest);
+    CHECK(diags[1].code == diag::SpecifyBlockParam);
+    CHECK(diags[2].code == diag::InvalidSpecifyPath);
+    CHECK(diags[3].code == diag::SpecifyPathMultiDim);
+    CHECK(diags[4].code == diag::InvalidSpecifyType);
+    CHECK(diags[5].code == diag::InvalidSpecifySource);
+    CHECK(diags[6].code == diag::InvalidSpecifyDest);
+    CHECK(diags[7].code == diag::InvalidSpecifyPath);
+    CHECK(diags[8].code == diag::ParallelPathWidth);
+    CHECK(diags[9].code == diag::DelayNotNumeric);
+    CHECK(diags[10].code == diag::SpecifyPathBadReference);
+    CHECK(diags[11].code == diag::SpecifyPathConditionExpr);
+    CHECK(diags[12].code == diag::SpecifyPathConditionExpr);
+    CHECK(diags[13].code == diag::SpecifyPathConditionExpr);
+    CHECK(diags[14].code == diag::SpecifyPathConditionExpr);
+    CHECK(diags[15].code == diag::InvalidSpecifySource);
+    CHECK(diags[16].code == diag::InvalidSpecifyDest);
+}
+
+TEST_CASE("Pathpulse specparams") {
+    auto tree = SyntaxTree::fromText(R"(
+module m(input foo, output bar);
+    typedef int blah;
+    specify
+        specparam PATHPULSE$ = (1, 2);
+        specparam l = PATHPULSE$;
+        specparam PATHPULSE$foo$bar = (1, 2);
+        specparam PATHPULSE$foo$baz = (1, 2);
+        specparam PATHPULSE$foo$foo = (1, 2);
+        specparam PATHPULSE$foo$blah = (1, 2);
+        specparam PATHPULSE$asdf = (1, 2);
+        specparam PATHPULSE$foo$ = (1, 2);
+        specparam PATHPULSE$$bar = (1, 2);
+    endspecify
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 7);
+    CHECK(diags[0].code == diag::PathPulseInExpr);
+    CHECK(diags[1].code == diag::TypoIdentifier);
+    CHECK(diags[2].code == diag::InvalidSpecifyDest);
+    CHECK(diags[3].code == diag::InvalidSpecifyDest);
+    CHECK(diags[4].code == diag::PathPulseInvalidPathName);
+    CHECK(diags[5].code == diag::PathPulseInvalidPathName);
+    CHECK(diags[6].code == diag::PathPulseInvalidPathName);
+}
+
+TEST_CASE("Specify pulsestyle directives") {
+    auto tree = SyntaxTree::fromText(R"(
+module m(input a, output b);
+    specify
+        pulsestyle_onevent a, b, b;
+        pulsestyle_ondetect b;
+        showcancelled b;
+        noshowcancelled b, b;
+    endspecify
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::InvalidSpecifyDest);
+}
+
+TEST_CASE("System timing checks") {
+    auto tree = SyntaxTree::fromText(R"(
+module m(input a, clk, data, output b);
+    reg notify;
+    wire bar;
+    wire [1:0] w;
+
+    specify
+        specparam tSU = 1, tHLD = 3:4:5;
+        $setup(posedge clk, data, 42);
+        $hold(posedge clk, data, 42, );
+        $setuphold(posedge clk, data, tSU, tHLD, notify, 1:2:3, bar, dclk, ddata);
+        $recovery(posedge clk, data, 42);
+        $removal(posedge clk, data, 42, );
+        $recrem(posedge clk, data, tSU, tHLD, notify, 1:2:3, bar, dclk);
+        $recrem(posedge clk, data, tSU, tHLD, notify, 1:2:3, bar, w[0], ddata);
+        $skew(posedge clk, data, 42);
+        $timeskew(posedge clk, negedge data, 42, , 1, 0:1:0);
+        $fullskew(posedge clk, negedge data, 42, 32, , 1, 0:1:0);
+        $period(edge [01, x1, 1Z] clk, 42, notify);
+        $width(posedge clk, 42, 52);
+        $nochange(posedge clk, negedge data, -1, -2);
+    endspecify
+
+    wire x = dclk;
+    wire y = ~ddata;
+endmodule
+
+`default_nettype none
+module n(input wire clk, data, output reg b);
+    logic dclk, ddata;
+    specify
+        $recrem(posedge clk, data, 1, 2, , , , dclk, );
+    endspecify
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("System timing check errors") {
+    auto tree = SyntaxTree::fromText(R"(
+module m(input a, output b);
+    reg notify;
+    enum { ABC } abc;
+    int d[];
+
+    specify
+        $foobar(1, 2, 3);
+        $setup(posedge a);
+        $setup(posedge a, negedge a, 123, notify, 123);
+        $setup(posedge a, , 123, notify);
+        $setup(posedge a, negedge a, negedge a, notify);
+        $setup(posedge a, negedge a, 1:2:3, notify);
+        $setup(posedge a, negedge a, notify, notify);
+        $setup(posedge a, negedge a, 1, notify[0]);
+        $setup(posedge a, negedge a, 1, ABC);
+        $setup(posedge a &&& d, negedge a, 1);
+        $setup(edge [1xx] a &&& notify, negedge a, 1);
+        $setuphold(notify, negedge a, 1, 2, , , , asdf);
+        $setup(posedge a, a, -12.14);
+        $width(a, 1);
+        $nochange(edge [1x] a, a, 1, 2);
+    endspecify
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 14);
+    CHECK(diags[0].code == diag::UnknownSystemTimingCheck);
+    CHECK(diags[1].code == diag::TooFewArguments);
+    CHECK(diags[2].code == diag::TooManyArguments);
+    CHECK(diags[3].code == diag::EmptyArgNotAllowed);
+    CHECK(diags[4].code == diag::TimingCheckEventNotAllowed);
+    CHECK(diags[5].code == diag::ConstEvalNonConstVariable);
+    CHECK(diags[6].code == diag::InvalidTimingCheckNotifierArg);
+    CHECK(diags[7].code == diag::BadAssignment);
+    CHECK(diags[8].code == diag::NotBooleanConvertible);
+    CHECK(diags[9].code == diag::InvalidEdgeDescriptor);
+    CHECK(diags[10].code == diag::InvalidSpecifySource);
+    CHECK(diags[11].code == diag::NegativeTimingLimit);
+    CHECK(diags[12].code == diag::TimingCheckEventEdgeRequired);
+    CHECK(diags[13].code == diag::NoChangeEdgeRequired);
+}
+
+TEST_CASE("System timing check implicit nets") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    specify
+        $setup(a &&& b, c, 1);
+        $setuphold(a, b, 1, 2, , d, e);
+    endspecify
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Specify path dup warnings") {
+    auto tree = SyntaxTree::fromText(R"(
+module m(input a, clk, reset, [3:0] c, output b, out, [3:0] q, d);
+    logic data;
+    specify
+        (a => b) = 1;
+    endspecify
+
+    specify
+        (a => b) = 1;
+        (c[1:0], c[2], c[3], c[0] *> d[1:0]) = 1;
+        (c *> d, d) = 1;
+
+        // These are not dups
+        (posedge clk => (q[0] : data)) = (10, 5);
+        (negedge clk => (q[0] : data)) = (20, 12);
+
+        // Also not dups
+        if (reset)
+            (posedge clk => (q[1] : data)) = (15, 8);
+        if (!reset)
+            (posedge clk => (q[1] : data)) = (6, 2);
+        if (reset && clk)
+            (posedge clk => (q[1] : data)) = (15, 8);
+
+        // This is a dup because of the select range
+        if (~reset && ~clk)
+            (negedge clk *> (q[2:1] : data)) = (6, 2);
+
+        if (a) (a => out) = (2,2);
+        if (b) (a => out) = (2,2);
+        ifnone (a => out) = (1,1);
+        ifnone (a => out) = (1,1);
+        (a => out) = (1,1);
+    endspecify
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 6);
+    CHECK(diags[0].code == diag::DupTimingPath);
+    CHECK(diags[1].code == diag::DupTimingPath);
+    CHECK(diags[2].code == diag::DupTimingPath);
+    CHECK(diags[3].code == diag::DupTimingPath);
+    CHECK(diags[4].code == diag::DupTimingPath);
+    CHECK(diags[5].code == diag::DupTimingPath);
+}
+
+TEST_CASE("Invalid pulse style warning") {
+    auto tree = SyntaxTree::fromText(R"(
+module m(input a, output b, c);
+    specify
+        (a => b) = 1;
+        pulsestyle_ondetect b, c;
+        (a => c) = 1;
+    endspecify
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::InvalidPulseStyle);
+}
+
+TEST_CASE("Charge and drive strength API access") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    assign (supply1, weak0) foo = 1;
+    pullup (strong1) p1 (a);
+    trireg (small) b;
+    wire (highz0, pull1) c = 0;
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+
+    auto& m = compilation.getRoot().topInstances[0]->body;
+
+    auto ds = m.membersOfType<ContinuousAssignSymbol>()[0]->getDriveStrength();
+    CHECK(ds.first == DriveStrength::Weak);
+    CHECK(ds.second == DriveStrength::Supply);
+
+    ds = m.find<PrimitiveInstanceSymbol>("p1").getDriveStrength();
+    CHECK(!ds.first);
+    CHECK(ds.second == DriveStrength::Strong);
+
+    ds = m.find<NetSymbol>("c").getDriveStrength();
+    CHECK(ds.first == DriveStrength::HighZ);
+    CHECK(ds.second == DriveStrength::Pull);
+
+    auto cs = m.find<NetSymbol>("b").getChargeStrength();
+    CHECK(cs == ChargeStrength::Small);
 }

@@ -1,10 +1,13 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
-#include "slang/binding/Expression.h"
-#include "slang/symbols/CompilationUnitSymbols.h"
-#include "slang/symbols/ParameterSymbols.h"
+#include "slang/ast/Expression.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/types/Type.h"
 #include "slang/syntax/AllSyntax.h"
-#include "slang/types/Type.h"
 
 TEST_CASE("I/O system tasks") {
     auto tree = SyntaxTree::fromText(R"(
@@ -190,7 +193,7 @@ TEST_CASE("Utility system functions") {
 
     auto typeof = [&](const std::string& source) {
         auto tree = SyntaxTree::fromText(string_view(source));
-        BindContext context(scope, LookupLocation::max);
+        ASTContext context(scope, LookupLocation::max);
         return Expression::bind(tree->root().as<ExpressionSyntax>(), context).type->toString();
     };
 
@@ -243,7 +246,7 @@ TEST_CASE("Conversion system functions") {
 
     auto typeof = [&](const std::string& source) {
         auto tree = SyntaxTree::fromText(string_view(source));
-        BindContext context(scope, LookupLocation::max);
+        ASTContext context(scope, LookupLocation::max);
         return Expression::bind(tree->root().as<ExpressionSyntax>(), context).type->toString();
     };
 

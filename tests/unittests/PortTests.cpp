@@ -1,12 +1,15 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
-#include "slang/compilation/Definition.h"
-#include "slang/symbols/CompilationUnitSymbols.h"
-#include "slang/symbols/InstanceSymbols.h"
-#include "slang/symbols/ParameterSymbols.h"
-#include "slang/symbols/PortSymbols.h"
-#include "slang/symbols/VariableSymbols.h"
-#include "slang/types/Type.h"
+#include "slang/ast/Definition.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/PortSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/Type.h"
 
 TEST_CASE("Module ANSI ports") {
     auto tree = SyntaxTree::fromText(R"(
@@ -1646,6 +1649,32 @@ module top;
         .a,
         .b
     );
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Interface array port with modport selector passthrough") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    logic i;
+    modport m(input i);
+endinterface
+
+module top;
+    I i();
+
+    m m1(i.m);
+endmodule
+
+module m (I.m p1);
+    n n1(.p1);
+endmodule
+
+module n (I.m p1);
 endmodule
 )");
 

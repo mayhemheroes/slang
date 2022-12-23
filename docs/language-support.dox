@@ -3,10 +3,9 @@
 
 @tableofcontents
 
-This is a rough attempt at giving an overview of which SystemVerilog features
-slang supports, and those which it does not. This is not a promise that features
-marked "supported" are bug-free, but should imply that any such bugs are as of yet
-unknown to me and should be reported if discovered.
+This is an overview of which SystemVerilog features slang supports, and those which
+it yet does not. This is not a promise that features marked "supported" are bug-free,
+but should imply that any such bugs are as of yet unknown and should be reported if discovered.
 
 Features are expressed via references to chapters and sections within the
 IEEE 1800-2017 SystemVerilog Language Reference Manual (LRM).
@@ -15,7 +14,7 @@ IEEE 1800-2017 SystemVerilog Language Reference Manual (LRM).
 
 ## Chapters 1-4
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-dim}} 1 | Overview | N/A
 {{m-dim}} 2 | Normative references | N/A
@@ -24,7 +23,7 @@ LRM | Feature | Supported
 
 ## 5. Lexical conventions
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 5.2 | Lexical tokens | v0.2
 {{m-success}} 5.3 | White space | v0.2
@@ -41,7 +40,7 @@ LRM | Feature | Supported
 
 ## 6. Data types
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 6.2 | Data types | v0.2
 {{m-success}} 6.3 | Value set | v0.2
@@ -79,7 +78,7 @@ LRM | Feature | Supported
 
 ## 7. Aggregate data types
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 7.2 | Structures | v0.2
 {{m-success}} 7.3 | Unions | v0.9
@@ -95,7 +94,7 @@ LRM | Feature | Supported
 
 ## 8. Classes
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 8.3 | Syntax | v0.2
 {{m-success}} 8.4 | Objects | v0.5
@@ -127,7 +126,7 @@ LRM | Feature | Supported
 
 ## 9. Processes
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 9.2.1 | Initial procedures | v0.2
 {{m-success}} 9.2.2 | Always procedures | v0.2
@@ -152,7 +151,7 @@ LRM | Feature | Supported
 
 ## 10. Assignment statements
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 10.3 | Continuous assignments | v0.7
 {{m-success}} 10.4 | Procedural assignments | v0.2
@@ -166,7 +165,7 @@ LRM | Feature | Supported
 
 ## 11. Operators and expressions
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 11.3 | Operators | v0.2
 {{m-success}} 11.4 | Operator descriptions | v0.2
@@ -182,7 +181,7 @@ LRM | Feature | Supported
 
 ## 12. Procedural programming statements
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 12.4 | Conditional if-else statement | v0.2
 {{m-success}} 12.5 | Case statement | v0.2
@@ -197,7 +196,7 @@ LRM | Feature | Supported
 
 ## 13. Tasks and functions
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 13.3 | Tasks | v0.2
 {{m-success}} 13.3.2 | Task memory usage and concurrent activation | v0.7
@@ -210,7 +209,7 @@ LRM | Feature | Supported
 
 ## 14. Clocking blocks
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 14.3 | Clocking block declaration | v0.8
 {{m-success}} 14.4 | Input and output skews | v0.8
@@ -229,7 +228,7 @@ LRM | Feature | Supported
 
 ## 15. Interprocess synchronization and communication
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 15.3 | Semaphores | v0.6
 {{m-success}} 15.4 | Mailboxes | v1.0
@@ -237,7 +236,7 @@ LRM | Feature | Supported
 
 ## 16. Assertions
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 16.3 | Immediate assertions | v0.2
 {{m-success}} 16.4 | Deferred assertions | v0.8
@@ -252,7 +251,7 @@ LRM | Feature | Supported
 {{m-warning}} 16.12.22 | Nondegeneracy | partial
 {{m-warning}} 16.13 | Multiclock support | partial
 {{m-success}} 16.14 | Concurrent assertions | v0.8
-{{m-danger}}  16.14.7 | Inferred value functions | no
+{{m-warning}} 16.14.7 | Inferred value functions | partial
 {{m-success}} 16.15 | Disable iff resolution | v0.8
 {{m-danger}}  16.16 | Clock resolution | no
 {{m-success}} 16.17 | Expect statement | v0.8
@@ -260,7 +259,7 @@ LRM | Feature | Supported
 
 ## 17. Checkers
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-danger}} 17.2 | Checker declaration | no
 {{m-danger}} 17.3 | Checker instantiation | no
@@ -273,7 +272,7 @@ LRM | Feature | Supported
 
 ## 18. Constrained random value generation
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 18.3 | Concepts and usage | v0.6
 {{m-success}} 18.4 | Random variables | v0.6
@@ -293,7 +292,7 @@ LRM | Feature | Supported
 
 ## 19. Functional coverage
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 19.3 | Defining the coverage model | v1.0
 {{m-success}} 19.4 | Using covergroup in classes | v1.0
@@ -307,7 +306,7 @@ LRM | Feature | Supported
 
 ## 20. Utility system tasks and system functions
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 20.2 | Simulation control tasks | v0.2
 {{m-success}} 20.3 | Simulation time functions | v0.2
@@ -330,7 +329,7 @@ LRM | Feature | Supported
 
 ## 21. Input/output system tasks and system functions
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 21.2 | Display system tasks | v0.2
 {{m-success}} 21.3 | File I/O tasks and functions | v0.4
@@ -341,7 +340,7 @@ LRM | Feature | Supported
 
 ## 22. Compiler directives
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 22.3 | \`resetall | v0.2
 {{m-success}} 22.4 | \`include | v0.2
@@ -358,7 +357,7 @@ LRM | Feature | Supported
 
 ## 23. Modules and hierarchy
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 23.2.1 | Module definitions | v0.2
 {{m-success}} 23.2.2 | Port declarations | v1.0
@@ -379,24 +378,24 @@ LRM | Feature | Supported
 
 ## 24. Programs
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
-{{m-warning}} 24.3 | The program construct | partial
+{{m-success}} 24.3 | The program construct | v3.0
 {{m-dim}}     24.4 | Eliminating testbench races | N/A
-{{m-danger}}  24.5 | Blocking tasks in cycle/event mode | no
-{{m-danger}}  24.6 | Programwide space and anonymous programs | no
-{{m-danger}}  24.7 | Program control tasks | no
+{{m-success}} 24.5 | Blocking tasks in cycle/event mode | v3.0
+{{m-success}} 24.6 | Programwide space and anonymous programs | v3.0
+{{m-success}} 24.7 | Program control tasks | v0.2
 
 ## 25. Interfaces
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 25.3 | Interface syntax | v0.2
 {{m-success}} 25.4 | Ports in interfaces | v0.2
 {{m-success}} 25.5 | Modports | v0.6
 {{m-success}} 25.5.4 | Modport expressions | v2.0
 {{m-success}} 25.5.5 | Clocking blocks and modports | v2.0
-{{m-danger}}  25.6 | Interfaces and specify blocks | no
+{{m-success}} 25.6 | Interfaces and specify blocks | v3.0
 {{m-success}} 25.7 | Tasks and functions in interfaces | v2.0
 {{m-success}} 25.8 | Parameterized interfaces | v0.2
 {{m-warning}} 25.9 | Virtual interfaces | partial
@@ -404,7 +403,7 @@ LRM | Feature | Supported
 
 ## 26. Packages
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 26.2 | Package declarations | v0.2
 {{m-success}} 26.3 | Referencing data in packages | v0.2
@@ -415,7 +414,7 @@ LRM | Feature | Supported
 
 ## 27. Generate constructs
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 27.3 | Generate construct syntax | v0.2
 {{m-success}} 27.4 | Loop generate constructs | v0.2
@@ -424,7 +423,7 @@ LRM | Feature | Supported
 
 ## 28. Gate-level and switch-level modeling
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 28.3 | Gate and switch declaration syntax | v0.7
 {{m-success}} 28.4 | and, nand, nor, or, xor, and xnor gates | v0.7
@@ -443,7 +442,7 @@ LRM | Feature | Supported
 
 ## 29. User-defined primitives
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-warning}} 29.3 | UDP definition | partial
 {{m-warning}} 29.4 | Combinational UDPs | partial
@@ -456,30 +455,30 @@ LRM | Feature | Supported
 
 ## 30. Specify blocks
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
-{{m-danger}}  30.3 | Specify block declaration | no
-{{m-danger}}  30.4 | Module path declarations | no
-{{m-danger}}  30.5 | Assigning delays to module paths | no
+{{m-success}} 30.3 | Specify block declaration | v3.0
+{{m-success}} 30.4 | Module path declarations | v3.0
+{{m-success}} 30.5 | Assigning delays to module paths | v3.0
 {{m-dim}}     30.6 | Mixing module path delays and distributed delays | N/A
-{{m-danger}}  30.7 | Detailed control of pulse filtering behavior | no
+{{m-success}} 30.7 | Detailed control of pulse filtering behavior | v3.0
 
 ## 31. Timing checks
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
-{{m-danger}}  31.2 | Overview | no
-{{m-danger}}  31.3 | Timing checks using a stability window | no
-{{m-danger}}  31.4 | Timing checks for clock and control signals | no
-{{m-danger}}  31.5 | Edge-control specifiers | no
-{{m-danger}}  31.6 | Notifiers: user-defined responses to timing violations | no
-{{m-danger}}  31.7 | Enabling timing checks with conditioned events | no
-{{m-danger}}  31.8 | Vector signals in timing checks | no
-{{m-danger}}  31.9 | Negative timing checks | no
+{{m-success}} 31.2 | Overview | v3.0
+{{m-success}} 31.3 | Timing checks using a stability window | v3.0
+{{m-success}} 31.4 | Timing checks for clock and control signals | v3.0
+{{m-success}} 31.5 | Edge-control specifiers | v3.0
+{{m-success}} 31.6 | Notifiers: user-defined responses to timing violations | v3.0
+{{m-success}} 31.7 | Enabling timing checks with conditioned events | v3.0
+{{m-success}} 31.8 | Vector signals in timing checks | v3.0
+{{m-success}} 31.9 | Negative timing checks | v3.0
 
 ## 32. Backannotation using the standard delay format
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-dim}}     32.3 | The SDF annotator | N/A
 {{m-dim}}     32.4 | Mapping of SDF constructs to SystemVerilog | N/A
@@ -489,22 +488,36 @@ LRM | Feature | Supported
 {{m-dim}}     32.8 | SDF to SystemVerilog delay value mapping | N/A
 {{m-success}} 32.9 | Loading timing data from an SDF file | v0.7
 
-## Chapters 33-34
+## 33. Configuring the contents of a design
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
-{{m-danger}}  33 | Configuring the contents of a design | no
-{{m-danger}}  34 | Protected envelopes | no
+{{m-danger}}  33.2 | Overview | no
+{{m-danger}}  33.3 | Libraries | no
+{{m-danger}}  33.4 | Configurations | no
+{{m-danger}}  33.5 | Using libraries and configs | no
+{{m-danger}}  33.6 | Configuration examples | no
+{{m-danger}}  33.7 | Displaying library binding information | no
+{{m-danger}}  33.8 | Library mapping examples | no
+
+## 34. Protected envelopes
+
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
+--- | ------- | ---------
+{{m-dim}}     34.2 | Overview | N/A
+{{m-dim}}     34.3 | Processing protected envelopes | N/A
+{{m-success}} 34.4 | Protect pragma directives | v2.0
+{{m-success}} 34.5 | Protect pragma keywords | v2.0
 
 ## 35. Direct programming interface
 
-LRM | Feature | Supported
+{{w:15%}} LRM | Feature | {{w:15%}} Supported
 --- | ------- | ---------
 {{m-success}} 35.2 | Overview | v0.6
 {{m-dim}}     35.3 | Two layers of DPI | N/A
 {{m-success}} 35.4 | Global namespace of imported and exported functions | v0.6
 {{m-success}} 35.5 | Imported tasks and functions | v0.6
-{{m-danger}}  35.5.6.1 | Open arrays | no
+{{m-success}}  35.5.6.1 | Open arrays | v3.0
 {{m-success}} 35.6 | Calling imported functions | v0.6
 {{m-success}} 35.7 | Exported functions | v0.6
 {{m-success}} 35.8 | Exported tasks | v0.6

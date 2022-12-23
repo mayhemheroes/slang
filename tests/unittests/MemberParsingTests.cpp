@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
 #include "slang/parsing/Parser.h"
@@ -600,6 +603,7 @@ module m;
         pulsestyle_ondetect out;
         if (opcode == 2'b10) (i2 => o1) = (5.6, 8.0);
         ( negedge clk => ( q[0] +: data ) ) = (20, 12);
+        ( negedge clk => ( q[0] : data ) ) = (20, 12);
         ifnone (i2 => o1) = 15.0, 15.0;
         (s *> q) = 1;
         (a, b, c *> q1, q2) = 10;
@@ -625,18 +629,70 @@ TEST_CASE("specify block parsing errors") {
 module m;
     specify
         $width(edge[0 1, 22, , 11] clr);
+        (a += b) = 1;
+        (a += > b) = 2;
+        (a b) = 2;
+        (posedge a => b) = 2;
+        (a, b => b, c) = 2;
+        (a => b) = (1, 2, 3, 4);
+        ifnone (a => (b : 1)) = 2;
+        $width(edge[01, 10, 0x, 1x, x0, x1, z0, 1Z] clr);
+        $width(posedge [01, 10, 0x] clr);
     endspecify
 endmodule
 )";
 
     parseCompilationUnit(text);
 
-    REQUIRE(diagnostics.size() == 5);
+    REQUIRE(diagnostics.size() == 15);
     CHECK(diagnostics[0].code == diag::InvalidEdgeDescriptor);
     CHECK(diagnostics[1].code == diag::ExpectedToken);
     CHECK(diagnostics[2].code == diag::InvalidEdgeDescriptor);
     CHECK(diagnostics[3].code == diag::ExpectedEdgeDescriptor);
     CHECK(diagnostics[4].code == diag::InvalidEdgeDescriptor);
+    CHECK(diagnostics[5].code == diag::ExpectedPathOp);
+    CHECK(diagnostics[6].code == diag::ExpectedPathOp);
+    CHECK(diagnostics[7].code == diag::ExpectedPathOp);
+    CHECK(diagnostics[8].code == diag::UnexpectedEdgeKeyword);
+    CHECK(diagnostics[9].code == diag::MultipleParallelTerminals);
+    CHECK(diagnostics[10].code == diag::MultipleParallelTerminals);
+    CHECK(diagnostics[11].code == diag::WrongSpecifyDelayCount);
+    CHECK(diagnostics[12].code == diag::IfNoneEdgeSensitive);
+    CHECK(diagnostics[13].code == diag::TooManyEdgeDescriptors);
+    CHECK(diagnostics[14].code == diag::EdgeDescWrongKeyword);
+}
+
+TEST_CASE("PATHPULSE$ specparams") {
+    auto& text = R"(
+module m;
+    specify
+        specparam PATHPULSE$ = (1:2:3, 4:5:6);
+        specparam PATHPULSE$a$b = (1:2:3, 4:5:6);
+    endspecify
+endmodule
+)";
+
+    parseCompilationUnit(text);
+    CHECK_DIAGNOSTICS_EMPTY;
+}
+
+TEST_CASE("PATHPULSE$ specparam errors") {
+    auto& text = R"(
+module m;
+    specparam PATHPULSE$ = (1:2:3, 4:5:6);
+    specify
+        specparam PATHPULSE$a$b = 1;
+        specparam a = (1:2:3, 4:5:6);
+    endspecify
+endmodule
+)";
+
+    parseCompilationUnit(text);
+
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].code == diag::PulseControlSpecifyParent);
+    CHECK(diagnostics[1].code == diag::PulseControlTwoValues);
+    CHECK(diagnostics[2].code == diag::PulseControlPATHPULSE);
 }
 
 TEST_CASE("Invalid package decls") {
@@ -1023,4 +1079,31 @@ endconfig
 
     parseCompilationUnit(text);
     CHECK_DIAGNOSTICS_EMPTY;
+}
+
+TEST_CASE("Parser::parseGuess testing of top-level attributes") {
+    auto tree = SyntaxTree::fromText(R"(
+(* myattrib *)
+module dummy();
+endmodule
+)");
+
+    CHECK(tree->diagnostics().empty());
+
+    auto& attributes = tree->root().as<ModuleDeclarationSyntax>().attributes;
+    REQUIRE(attributes.size() == 1);
+    CHECK(attributes[0]->specs[0]->name.valueText() == "myattrib");
+}
+
+TEST_CASE("Bind directive invalid name") {
+    auto& text = R"(
+module m;
+    bind asdf.bar: foo.bar, asdf.bar m m1();
+endmodule
+)";
+
+    parseCompilationUnit(text);
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::BindDirectiveInvalidName);
 }

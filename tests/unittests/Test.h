@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #pragma once
 
 #ifdef _MSC_VER
@@ -9,7 +12,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_templated.hpp>
 
-#include "slang/compilation/Compilation.h"
+#include "slang/ast/Compilation.h"
 #include "slang/diagnostics/AllDiags.h"
 #include "slang/syntax/SyntaxTree.h"
 
@@ -18,7 +21,8 @@ namespace slang {
 extern BumpAllocator alloc;
 extern Diagnostics diagnostics;
 
-class InstanceSymbol;
+namespace syntax {
+
 struct ClassDeclarationSyntax;
 struct CompilationUnitSyntax;
 struct ExpressionSyntax;
@@ -26,9 +30,18 @@ struct MemberSyntax;
 struct ModuleDeclarationSyntax;
 struct StatementSyntax;
 
+} // namespace syntax
+
+namespace ast {
+class InstanceSymbol;
+}
+
 } // namespace slang
 
 using namespace slang;
+using namespace slang::parsing;
+using namespace slang::syntax;
+using namespace slang::ast;
 
 #define CHECK_DIAGNOSTICS_EMPTY               \
     do {                                      \

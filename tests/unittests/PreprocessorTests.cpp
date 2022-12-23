@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
 #include "slang/parsing/Preprocessor.h"
@@ -1233,7 +1236,7 @@ TEST_CASE("begin_keywords (nested)") {
     CHECK_DIAGNOSTICS_EMPTY;
 }
 
-optional<TimeScale> lexTimeScale(string_view text) {
+std::optional<TimeScale> lexTimeScale(string_view text) {
     diagnostics.clear();
 
     Preprocessor preprocessor(getSourceManager(), alloc, diagnostics);
@@ -1518,9 +1521,6 @@ TEST_CASE("Pragma expressions -- errors") {
 `pragma reset (asdf, asdf), foo
 `pragma resetall asdf, asdf
 `pragma once asdf
-
-`pragma protect begin
-`pragma protect end
 )";
 
     preprocess(text);
@@ -1542,42 +1542,36 @@ source:10:41: error: expected pragma expression
 source:11:34: error: expected ','
 `pragma bar "asdf", (asdf, "asdf" asdf)
                                  ^
-source:13:34: error: expected ')'
-`pragma bar "asdf", (asdf, "asdf"
-                                 ^
-source:12:35: error: expected ')'
-`pragma bar "asdf", (asdf, "asdf",
-                                  ^
 source:11:9: warning: unknown pragma 'bar' [-Wunknown-pragma]
 `pragma bar "asdf", (asdf, "asdf" asdf)
         ^~~
+source:12:35: error: expected ')'
+`pragma bar "asdf", (asdf, "asdf",
+                                  ^
+source:13:34: error: expected ')'
+`pragma bar "asdf", (asdf, "asdf"
+                                 ^
 source:16:18: error: expected pragma expression
 `pragma bar 'h 3e+2
                  ^
-source:17:1: error: expected pragma name
-`pragma /* asdf
-^
 source:16:9: warning: unknown pragma 'bar' [-Wunknown-pragma]
 `pragma bar 'h 3e+2
         ^~~
-source:25:9: warning: language feature not yet supported [-Wnot-supported]
-`pragma protect end
-        ^~~~~~~
-source:24:9: warning: language feature not yet supported [-Wnot-supported]
-`pragma protect begin
-        ^~~~~~~
-source:22:14: warning: too many arguments provided for pragma 'once' [-Wextra-pragma-args]
-`pragma once asdf
-             ^
-source:21:18: warning: too many arguments provided for pragma 'resetall' [-Wextra-pragma-args]
-`pragma resetall asdf, asdf
-                 ^
+source:17:1: error: expected pragma name
+`pragma /* asdf
+^
 source:20:15: error: expected pragma name
 `pragma reset (asdf, asdf), foo
               ^~~~~~~~~~~~
 source:20:29: warning: unknown pragma 'foo' [-Wunknown-pragma]
 `pragma reset (asdf, asdf), foo
                             ^~~
+source:21:18: warning: too many arguments provided for pragma 'resetall' [-Wextra-pragma-args]
+`pragma resetall asdf, asdf
+                 ^
+source:22:14: warning: too many arguments provided for pragma 'once' [-Wextra-pragma-args]
+`pragma once asdf
+             ^
 )");
 }
 
@@ -1595,10 +1589,10 @@ TEST_CASE("Pragma diagnostic errors") {
 
     REQUIRE(diagnostics.size() == 6);
     CHECK(diagnostics[0].code == diag::ExpectedDiagPragmaArg);
-    CHECK(diagnostics[1].code == diag::ExpectedDiagPragmaArg);
-    CHECK(diagnostics[2].code == diag::ExpectedDiagPragmaLevel);
-    CHECK(diagnostics[3].code == diag::ExpectedDiagPragmaArg);
-    CHECK(diagnostics[4].code == diag::UnknownDiagPragmaArg);
+    CHECK(diagnostics[1].code == diag::UnknownDiagPragmaArg);
+    CHECK(diagnostics[2].code == diag::ExpectedDiagPragmaArg);
+    CHECK(diagnostics[3].code == diag::ExpectedDiagPragmaLevel);
+    CHECK(diagnostics[4].code == diag::ExpectedDiagPragmaArg);
     CHECK(diagnostics[5].code == diag::ExpectedDiagPragmaArg);
 }
 
@@ -1898,4 +1892,328 @@ endmodule
     Compilation compilation;
     compilation.addSyntaxTree(tree);
     NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Single preproc token diag location regress") {
+    auto tree = SyntaxTree::fromFileInMemory("`SV_COV_OK"sv, SyntaxTree::getDefaultSourceManager());
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    report(diags);
+
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::ExpectedMember);
+}
+
+TEST_CASE("Preprocessor max include depth regress GH #600") {
+    auto& text = R"(
+`include "local.svh"
+)";
+
+    PreprocessorOptions ppOptions;
+    ppOptions.maxIncludeDepth = 1;
+
+    preprocess(text, Bag(ppOptions));
+    CHECK_DIAGNOSTICS_EMPTY;
+}
+
+TEST_CASE("Pragma protect error handling") {
+    auto& text = R"(
+`pragma protect
+`pragma protect (a=1)
+`pragma protect "foo"
+`pragma protect foo=(1, 2, 3)
+`pragma protect author=1
+`pragma protect runtime_license
+`pragma protect runtime_license=(8'd4)
+`pragma protect runtime_license=(8'd4, library=foo, foo=bar, match=(1,2))
+`pragma protect viewport
+`pragma protect viewport=(1, 2)
+`pragma protect viewport=(foo=1, bar=2)
+`pragma protect viewport=(object=1, access=2)
+`pragma protect viewport=(object="hello", access="world")
+`pragma protect begin=1
+`pragma protect begin
+`pragma protect end
+`pragma protect end
+`pragma protect end
+`pragma protect end_protected
+`pragma protect encoding=1
+`pragma protect encoding=(1, foo=bar, enctype="blah", line_length=32'dx, bytes=9e99)
+`pragma protect encoding=32'd
+`pragma protect begin_protected, /
+)";
+
+    preprocess(text);
+
+    REQUIRE(diagnostics.size() == 27);
+    CHECK(diagnostics[0].code == diag::ExpectedProtectKeyword);
+    CHECK(diagnostics[1].code == diag::ExpectedProtectKeyword);
+    CHECK(diagnostics[2].code == diag::ExpectedProtectKeyword);
+    CHECK(diagnostics[3].code == diag::UnknownProtectKeyword);
+    CHECK(diagnostics[4].code == diag::ExpectedProtectArg);
+    CHECK(diagnostics[5].code == diag::ProtectArgList);
+    CHECK(diagnostics[6].code == diag::ProtectArgList);
+    CHECK(diagnostics[7].code == diag::ProtectArgList);
+    CHECK(diagnostics[8].code == diag::ExpectedProtectArg);
+    CHECK(diagnostics[9].code == diag::UnknownProtectOption);
+    CHECK(diagnostics[10].code == diag::InvalidPragmaNumber);
+    CHECK(diagnostics[11].code == diag::InvalidPragmaViewport);
+    CHECK(diagnostics[12].code == diag::InvalidPragmaViewport);
+    CHECK(diagnostics[13].code == diag::InvalidPragmaViewport);
+    CHECK(diagnostics[14].code == diag::InvalidPragmaViewport);
+    CHECK(diagnostics[15].code == diag::ExtraPragmaArgs);
+    CHECK(diagnostics[16].code == diag::NestedProtectBegin);
+    CHECK(diagnostics[17].code == diag::ExtraProtectEnd);
+    CHECK(diagnostics[18].code == diag::ExtraProtectEnd);
+    CHECK(diagnostics[19].code == diag::ProtectArgList);
+    CHECK(diagnostics[20].code == diag::ProtectArgList);
+    CHECK(diagnostics[21].code == diag::UnknownProtectOption);
+    CHECK(diagnostics[22].code == diag::UnknownProtectEncoding);
+    CHECK(diagnostics[23].code == diag::InvalidPragmaNumber);
+    CHECK(diagnostics[24].code == diag::ExpectedVectorDigits);
+    CHECK(diagnostics[25].code == diag::ProtectArgList);
+    CHECK(diagnostics[26].code == diag::ExpectedPragmaExpression);
+}
+
+TEST_CASE("Pragma protect with multiline macro expansion") {
+    auto& text = R"(
+`define PROTECT(x) `pragma protect x \
+    author="jghkj"
+
+`PROTECT(data_block)
+)";
+
+    preprocess(text);
+
+    REQUIRE(diagnostics.size() == 3);
+    CHECK(diagnostics[0].code == diag::MacroTokensAfterPragmaProtect);
+    CHECK(diagnostics[1].code == diag::RawProtectEOF);
+    CHECK(diagnostics[2].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect raw encoding block") {
+    auto text = "`pragma protect encoding=(enctype=\"raw\", line_length=76, bytes=10), key_block\n"
+                "\0\\\"asdf\r\n"
+                "89.\n"
+                "hello"s;
+
+    auto result = preprocess(text);
+    CHECK(result == "\nhello");
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect raw encoding key") {
+    auto text = "`pragma protect encoding=(enctype=\"raw\"), data_public_key\n"
+                "\0\\\"asdf\r\n"
+                "hello"s;
+
+    auto result = preprocess(text);
+    CHECK(result == "\r\nhello");
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect raw encoding guess ending") {
+    auto text = "`pragma protect begin_protected\n"
+                "`pragma protect encoding=(enctype=\"raw\"), key_block\n"
+                "\0\\\"asdf\r\n"
+                "89`pra.\n"
+                "`pragma protect end_protected\n"
+                "hello"s;
+
+    auto result = preprocess(text);
+    CHECK(result == "\nhello");
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect uuencode") {
+    auto& text = R"(
+`pragma protect encoding=(enctype="uuencode", bytes=9), data_block
+&ABCD1234
+`
+#FGHJ
+hello)";
+
+    auto result = preprocess(text);
+    CHECK(result == "\nhello");
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect base64") {
+    auto& text = R"(
+`pragma protect encoding=(enctype="base64", bytes=7), data_block
+ABCD1234
+FG==
+hello)";
+
+    auto result = preprocess(text);
+    CHECK(result == "\nhello");
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect quoted-printable") {
+    auto& text = "`pragma protect encoding=(enctype=\"quoted-printable\", bytes=20), data_block\r\n"
+                 "ABCD1234 =21=00 =\r\n"
+                 "ABCD\r\n"
+                 "AB\r\n"
+                 "hello";
+
+    auto result = preprocess(text);
+    CHECK(result == "\r\nhello");
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect uuencode errors") {
+    auto& text = R"(
+`pragma protect begin_protected
+`pragma protect encoding=(enctype="uuencode", bytes=7), data_block
+ABCD!sdf
+`pragma protect end_protected
+`pragma protect data_block
+qqq
+)";
+
+    preprocess(text);
+
+    REQUIRE(diagnostics.size() == 4);
+    CHECK(diagnostics[0].code == diag::InvalidEncodingByte);
+    CHECK(diagnostics[1].code == diag::ProtectedEnvelope);
+    CHECK(diagnostics[2].code == diag::InvalidEncodingByte);
+    CHECK(diagnostics[3].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect base64 errors") {
+    auto& text = R"(
+`pragma protect encoding=(enctype="base64", bytes=7), data_block  /* asdf */ //asdf
+ABCD!sdf
+hello)";
+
+    preprocess(text);
+
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].code == diag::InvalidEncodingByte);
+    CHECK(diagnostics[1].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect quoted-printable errors") {
+    auto& text =
+        "`pragma protect encoding=(enctype=\"quoted-printable\", bytes=14), data_public_key\n"
+        "ABCD!sdf\x04 asdf\n"
+        "`pragma protect data_block\n"
+        "=q";
+
+    preprocess(text);
+
+    REQUIRE(diagnostics.size() == 4);
+    CHECK(diagnostics[0].code == diag::InvalidEncodingByte);
+    CHECK(diagnostics[1].code == diag::ProtectedEnvelope);
+    CHECK(diagnostics[2].code == diag::InvalidEncodingByte);
+    CHECK(diagnostics[3].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect wrong block byte count") {
+    auto& text = R"(
+`pragma protect encoding=(enctype="base64", bytes=7), data_block
+ABCD0123ABCD
+hello)";
+
+    preprocess(text);
+
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].code == diag::ProtectEncodingBytes);
+    CHECK(diagnostics[1].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect wrong line byte count") {
+    auto& text = R"(
+`pragma protect encoding=(enctype="raw", bytes=7), data_public_key
+ABCD0123ABCD
+hello)";
+
+    preprocess(text);
+
+    REQUIRE(diagnostics.size() == 2);
+    CHECK(diagnostics[0].code == diag::ProtectEncodingBytes);
+    CHECK(diagnostics[1].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Pragma protect LRM example") {
+    auto& text = R"(
+module secret (a, b);
+   input a;
+   output b;
+
+`pragma protect encoding=(enctype="raw")
+`pragma protect data_method="x-caesar", data_keyname="rot13", begin_protected
+`pragma protect encoding=(enctype="raw", bytes=192), data_block
+`centzn cebgrpg ehagvzr_yvprafr=(yvoenel="yvp.fb",srngher="ehaFrperg",ragel="pux",zngpu=42)
+   ert o;
+
+   vavgvny
+      ortva
+         o = 0;
+      raq
+
+   nyjnlf
+      ortva
+         #5 o = n;
+      raq
+`pragma protect end_protected
+`pragma reset protect
+`pragma protect reset
+
+endmodule // secret
+)";
+
+    auto result = preprocess(text);
+    CHECK(result == R"(
+module secret (a, b);
+   input a;
+   output b;
+endmodule // secret
+)");
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::ProtectedEnvelope);
+}
+
+TEST_CASE("Unknown directive or macro") {
+    auto& text = R"(
+`unknown_pragma
+)";
+
+    auto result = preprocess(text);
+    CHECK(result == "\n");
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics.back().code == diag::UnknownDirective);
+}
+
+TEST_CASE("Unknown but ignored directive") {
+    auto& text = R"(
+`unknown_pragma xyz abc 123
+)";
+    PreprocessorOptions ppOptions;
+    ppOptions.ignoreDirectives.emplace("unknown_pragma");
+
+    auto result = preprocess(text, ppOptions);
+    CHECK(result == "\n");
+    CHECK(diagnostics.empty());
+
+    auto tree = SyntaxTree::fromText(text, SyntaxTree::getDefaultSourceManager(), "source"sv, "",
+                                     ppOptions);
+    CHECK(SyntaxPrinter::printFile(*tree) == text);
 }

@@ -2,7 +2,8 @@
 //! @file DiagnosticEngine.h
 //! @brief Primary interface for managing diagnostic reporting
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -20,7 +21,7 @@ class DiagArgFormatter;
 class DiagnosticClient;
 class SourceManager;
 
-struct ReportedDiagnostic {
+struct SLANG_EXPORT ReportedDiagnostic {
     const Diagnostic& originalDiagnostic;
     span<const SourceLocation> expansionLocs;
     span<const SourceRange> ranges;
@@ -41,7 +42,7 @@ struct ReportedDiagnostic {
 /// - Register one or more DiagnosticClient derived classes with addClient()
 /// - Issue diagnostics by calling issue()
 ///
-class DiagnosticEngine {
+class SLANG_EXPORT DiagnosticEngine {
 public:
     /// Constructs a new diagnostic engine, using the specified source manager
     /// for reporting source-based information from diagnostics.
@@ -172,6 +173,11 @@ public:
     /// while applying options are returned via the diagnostics set.
     Diagnostics setMappingsFromPragmas();
 
+    /// Sets diagnostic options from the `pragma diagnostic entries in the given
+    /// source file tracked by the engine's source manager. Any errors encountered
+    /// while applying options are returned via the diagnostics set.
+    Diagnostics setMappingsFromPragmas(BufferID buffer);
+
     /// A helper function that takes a set of source ranges and translates them
     /// to be relevant to the given context location. For normal file ranges
     /// this doesn't do anything, but ranges within macro expansions get adjusted
@@ -181,7 +187,8 @@ public:
     /// be specified in their original textual locations. Otherwise they will
     /// remain as macro locations.
     void mapSourceRanges(SourceLocation loc, span<const SourceRange> ranges,
-                         SmallVector<SourceRange>& mapped, bool mapOriginalLocations = true) const;
+                         SmallVectorBase<SourceRange>& mapped,
+                         bool mapOriginalLocations = true) const;
 
     /// A helper method used as a shortcut to turn all of the specified diagnostics into
     /// a human-friendly string. This is mostly intended to be used for things like tests.
@@ -192,14 +199,19 @@ private:
     // sets a diagnostic to the given severity.
     struct DiagnosticMapping {
         size_t offset = 0;
-        optional<DiagnosticSeverity> severity;
+        std::optional<DiagnosticSeverity> severity;
 
-        DiagnosticMapping(size_t offset, optional<DiagnosticSeverity> severity) noexcept :
+        DiagnosticMapping(size_t offset, std::optional<DiagnosticSeverity> severity) noexcept :
             offset(offset), severity(severity) {}
     };
 
-    optional<DiagnosticSeverity> findMappedSeverity(DiagCode code, SourceLocation location) const;
+    std::optional<DiagnosticSeverity> findMappedSeverity(DiagCode code,
+                                                         SourceLocation location) const;
     void issueImpl(const Diagnostic& diagnostic, DiagnosticSeverity severity);
+
+    template<typename TDirective>
+    void setMappingsFromPragmasImpl(BufferID buffer, span<const TDirective> directives,
+                                    Diagnostics& diags);
 
     // The source manager used to resolve locations into file names.
     const SourceManager& sourceManager;
@@ -224,7 +236,7 @@ private:
     // A map from typeid to a formatter for that type. Used to register custom
     // formatters for subsystem-specific types.
     using FormatterMap = flat_hash_map<std::type_index, std::shared_ptr<DiagArgFormatter>>;
-    FormatterMap formatters;
+    mutable FormatterMap formatters;
 
     // A set of default formatters that will be assigned to each new DiagnosticEngine instance
     // that gets created. These can later be overridden on a per-instance basis.

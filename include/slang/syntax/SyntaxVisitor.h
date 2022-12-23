@@ -2,7 +2,8 @@
 //! @file SyntaxVisitor.h
 //! @brief Syntax tree visitor support
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -13,7 +14,7 @@
 #include "slang/util/Hash.h"
 #include "slang/util/TypeTraits.h"
 
-namespace slang {
+namespace slang::syntax {
 
 #define DERIVED static_cast<TDerived*>(this)
 
@@ -23,12 +24,12 @@ namespace slang {
 template<typename TDerived>
 class SyntaxVisitor {
     template<typename T, typename Arg>
-    using handle_t = decltype(std::declval<T>().handle(std::declval<Arg>()));
+    using handle_t = decltype(std::declval<T>().handle(std::declval<Arg&&>()));
 
 public:
     /// Visit the provided node, of static type T.
     template<typename T>
-    void visit(const T& t) {
+    void visit(T&& t) {
         if constexpr (is_detected_v<handle_t, TDerived, T>)
             DERIVED->handle(t);
         else
@@ -37,7 +38,8 @@ public:
 
     /// The default handler invoked when no visit() method is overridden for a particular type.
     /// Will visit all child nodes by default.
-    void visitDefault(const SyntaxNode& node) {
+    template<typename T>
+    void visitDefault(T&& node) {
         for (uint32_t i = 0; i < node.getChildCount(); i++) {
             auto child = node.childNode(i);
             if (child)
@@ -55,27 +57,48 @@ public:
 
 private:
     // This is to make things compile if the derived class doesn't provide an implementation.
-    void visitToken(Token) {}
+    void visitToken(parsing::Token) {}
 };
 
 namespace detail {
 
-struct SyntaxChange {
+struct SLANG_EXPORT SyntaxChange {
     const SyntaxNode* first = nullptr;
     SyntaxNode* second = nullptr;
-    Token separator;
-
-    enum Kind { Remove, Replace, InsertBefore, InsertAfter, InsertAtFront, InsertAtBack } kind;
-
-    SyntaxChange(Kind kind, const SyntaxNode* first, SyntaxNode* second, Token separator = {}) :
-        first(first), second(second), separator(separator), kind(kind) {}
+    parsing::Token separator = {};
 };
 
-using ChangeMap = flat_hash_map<const SyntaxNode*, detail::SyntaxChange>;
-using ListChangeMap = flat_hash_map<const SyntaxNode*, std::vector<detail::SyntaxChange>>;
-std::shared_ptr<SyntaxTree> transformTree(
-    BumpAllocator&& alloc, const std::shared_ptr<SyntaxTree>& tree, const ChangeMap& changes,
-    const ListChangeMap& listAdditions, const std::vector<std::shared_ptr<SyntaxTree>>& tempTrees);
+struct SLANG_EXPORT RemoveChange : SyntaxChange {};
+struct SLANG_EXPORT ReplaceChange : SyntaxChange {};
+
+using InsertChangeMap = flat_hash_map<const SyntaxNode*, std::vector<SyntaxChange>>;
+using ModifyChangeMap = flat_hash_map<const SyntaxNode*, std::variant<RemoveChange, ReplaceChange>>;
+using ListChangeMap = flat_hash_map<const SyntaxNode*, std::vector<SyntaxChange>>;
+
+struct SLANG_EXPORT ChangeCollection {
+    InsertChangeMap insertBefore;
+    InsertChangeMap insertAfter;
+    ModifyChangeMap removeOrReplace;
+    ListChangeMap listInsertAtFront;
+    ListChangeMap listInsertAtBack;
+
+    void clear() {
+        insertBefore.clear();
+        insertAfter.clear();
+        removeOrReplace.clear();
+        listInsertAtFront.clear();
+        listInsertAtBack.clear();
+    }
+
+    bool empty() const {
+        return insertBefore.empty() && insertAfter.empty() && removeOrReplace.empty() &&
+               listInsertAtFront.empty() && listInsertAtBack.empty();
+    }
+};
+
+SLANG_EXPORT std::shared_ptr<SyntaxTree> transformTree(
+    BumpAllocator&& alloc, const std::shared_ptr<SyntaxTree>& tree, const ChangeCollection& commits,
+    const std::vector<std::shared_ptr<SyntaxTree>>& tempTrees);
 
 } // namespace detail
 
@@ -94,18 +117,20 @@ public:
     /// Otherwise, the changes are applied and the newly rewritten syntax tree is returned.
     std::shared_ptr<SyntaxTree> transform(const std::shared_ptr<SyntaxTree>& tree) {
         sourceManager = &tree->sourceManager();
-        changes.clear();
+        commits.clear();
         tempTrees.clear();
 
         tree->root().visit(*this);
 
-        if (changes.empty())
+        if (commits.empty())
             return tree;
 
-        return transformTree(std::move(alloc), tree, changes, listAdditions, tempTrees);
+        return transformTree(std::move(alloc), tree, commits, tempTrees);
     }
 
 protected:
+    using Token = parsing::Token;
+
     /// A helper for derived classes that parses some text into syntax nodes.
     SyntaxNode& parse(string_view text) {
         tempTrees.emplace_back(SyntaxTree::fromText(text, *sourceManager));
@@ -114,57 +139,72 @@ protected:
 
     /// Register a removal for the given syntax node from the tree.
     void remove(const SyntaxNode& oldNode) {
-        changes.emplace(&oldNode,
-                        detail::SyntaxChange{ detail::SyntaxChange::Remove, &oldNode, nullptr });
+        if (auto [_, ok] = commits.removeOrReplace.emplace(&oldNode,
+                                                           detail::RemoveChange{&oldNode, nullptr});
+            !ok) {
+            throw std::logic_error("Node only permit one remove/replace operation");
+        }
     }
 
     /// Replace the given @a oldNode with @a newNode in the rewritten tree.
     void replace(const SyntaxNode& oldNode, SyntaxNode& newNode) {
-        changes.emplace(&oldNode,
-                        detail::SyntaxChange{ detail::SyntaxChange::Replace, &oldNode, &newNode });
+        if (auto [_, ok] = commits.removeOrReplace.emplace(
+                &oldNode, detail::ReplaceChange{&oldNode, &newNode});
+            !ok) {
+            throw std::logic_error("Node only permit one remove/replace operation");
+        }
     }
 
     /// Insert @a newNode before @a oldNode in the rewritten tree.
     void insertBefore(const SyntaxNode& oldNode, SyntaxNode& newNode) {
-        changes.emplace(&oldNode, detail::SyntaxChange{ detail::SyntaxChange::InsertBefore,
-                                                        &oldNode, &newNode });
+        commits.insertBefore[&oldNode].push_back({&oldNode, &newNode});
     }
 
     /// Insert @a newNode after @a oldNode in the rewritten tree.
     void insertAfter(const SyntaxNode& oldNode, SyntaxNode& newNode) {
-        changes.emplace(&oldNode, detail::SyntaxChange{ detail::SyntaxChange::InsertAfter, &oldNode,
-                                                        &newNode });
+        commits.insertAfter[&oldNode].push_back({&oldNode, &newNode});
     }
 
     /// Insert @a newNode at the front of @a list in the rewritten tree.
     void insertAtFront(const SyntaxListBase& list, SyntaxNode& newNode, Token separator = {}) {
-        listAdditions[&list].push_back(
-            { detail::SyntaxChange::InsertAtFront, &list, &newNode, separator });
+        commits.listInsertAtFront[&list].push_back({&list, &newNode, separator});
     }
 
     /// Insert @a newNode at the back of @a list in the rewritten tree.
     void insertAtBack(const SyntaxListBase& list, SyntaxNode& newNode, Token separator = {}) {
-        listAdditions[&list].push_back(
-            { detail::SyntaxChange::InsertAtBack, &list, &newNode, separator });
+        commits.listInsertAtBack[&list].push_back({&list, &newNode, separator});
     }
 
-    Token makeToken(TokenKind kind, string_view text) {
-        return Token(alloc, kind, {}, text, SourceLocation::NoLocation);
+    Token makeToken(parsing::TokenKind kind, string_view text,
+                    span<const parsing::Trivia> trivia = {}) {
+        return Token(alloc, kind, trivia, text, SourceLocation::NoLocation);
     }
 
-    Token makeId(string_view text) { return makeToken(TokenKind::Identifier, text); }
-    Token makeComma() { return makeToken(TokenKind::Comma, ","sv); }
+    Token makeId(string_view text, span<const parsing::Trivia> trivia = {}) {
+        return makeToken(parsing::TokenKind::Identifier, text, trivia);
+    }
+
+    Token makeId(string_view text, parsing::Trivia trivia) {
+        auto triviaPtr = alloc.emplace<parsing::Trivia>(trivia);
+        return makeId(text, {triviaPtr, 1});
+    }
+
+    Token makeComma() { return makeToken(parsing::TokenKind::Comma, ","sv); }
 
     BumpAllocator alloc;
     SyntaxFactory factory;
 
+    static const parsing::Trivia SingleSpace;
+
 private:
     SourceManager* sourceManager = nullptr;
-    detail::ChangeMap changes;
-    detail::ListChangeMap listAdditions;
+    detail::ChangeCollection commits;
     std::vector<std::shared_ptr<SyntaxTree>> tempTrees;
 };
 
+template<typename TDerived>
+const parsing::Trivia SyntaxRewriter<TDerived>::SingleSpace{parsing::TriviaKind::Whitespace, " "sv};
+
 #undef DERIVED
 
-} // namespace slang
+} // namespace slang::syntax

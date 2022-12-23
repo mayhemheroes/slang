@@ -2,13 +2,12 @@
 //! @file Preprocessor.h
 //! @brief SystemVerilog preprocessor and directive support
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
-#include <deque>
 #include <memory>
-#include <unordered_map>
 
 #include "slang/parsing/Lexer.h"
 #include "slang/parsing/NumberParser.h"
@@ -19,7 +18,7 @@
 #include "slang/util/SmallVector.h"
 #include "slang/util/StackContainer.h"
 
-namespace slang {
+namespace slang::syntax {
 
 struct DefineDirectiveSyntax;
 struct MacroActualArgumentListSyntax;
@@ -29,8 +28,12 @@ struct MacroFormalArgumentSyntax;
 struct PragmaDirectiveSyntax;
 struct PragmaExpressionSyntax;
 
+} // namespace slang::syntax
+
+namespace slang::parsing {
+
 /// Contains various options that can control preprocessing behavior.
-struct PreprocessorOptions {
+struct SLANG_EXPORT PreprocessorOptions {
     /// The maximum depth of the include stack; further attempts to include
     /// a file will result in an error.
     uint32_t maxIncludeDepth = 1024;
@@ -45,6 +48,9 @@ struct PreprocessorOptions {
 
     /// A set of macro names to undefine at the start of file preprocessing.
     std::vector<std::string> undefines;
+
+    /// A set of preprocessor directives to be ignored.
+    flat_hash_set<string_view> ignoreDirectives;
 };
 
 /// Preprocessor - Interface between lexer and parser
@@ -52,10 +58,11 @@ struct PreprocessorOptions {
 /// This class handles the messy interface between various source file lexers, include directives,
 /// and macro expansion, and the actual SystemVerilog parser that wants a nice coherent stream
 /// of tokens to consume.
-class Preprocessor {
+class SLANG_EXPORT Preprocessor {
 public:
     Preprocessor(SourceManager& sourceManager, BumpAllocator& alloc, Diagnostics& diagnostics,
-                 const Bag& options = {});
+                 const Bag& options = {},
+                 span<const syntax::DefineDirectiveSyntax* const> inheritedMacros = {});
 
     /// Gets the next token in the stream, after applying preprocessor rules.
     Token next();
@@ -105,7 +112,7 @@ public:
     void popDesignElementStack() { designElementDepth--; }
 
     /// Gets the currently active time scale value, if any has been set by the user.
-    const optional<TimeScale>& getTimeScale() const { return activeTimeScale; }
+    const std::optional<TimeScale>& getTimeScale() const { return activeTimeScale; }
 
     /// Gets the default net type to use if none is specified. This is set via
     /// the `default_nettype directive. If it is set to "none" by the user, this
@@ -124,7 +131,7 @@ public:
     Diagnostics& getDiagnostics() const { return diagnostics; }
 
     /// Gets all macros that have been defined thus far in the preprocessor.
-    std::vector<const DefineDirectiveSyntax*> getDefinedMacros() const;
+    std::vector<const syntax::DefineDirectiveSyntax*> getDefinedMacros() const;
 
 private:
     Preprocessor(const Preprocessor& other);
@@ -133,13 +140,14 @@ private:
     // Internal methods to grab and handle the next token
     Token nextProcessed();
     Token nextRaw();
+    void popSource();
 
     // directive handling methods
     Token handleDirectives(Token token);
     Trivia handleIncludeDirective(Token directive);
     Trivia handleResetAllDirective(Token directive);
     Trivia handleDefineDirective(Token directive);
-    Trivia handleMacroUsage(Token directive);
+    std::pair<Trivia, Trivia> handleMacroUsage(Token directive);
     Trivia handleIfDefDirective(Token directive, bool inverted);
     Trivia handleElsIfDirective(Token directive);
     Trivia handleElseDirective(Token directive);
@@ -151,10 +159,10 @@ private:
     Trivia handleUndefineAllDirective(Token directive);
     Trivia handleBeginKeywordsDirective(Token directive);
     Trivia handleEndKeywordsDirective(Token directive);
-    Trivia handlePragmaDirective(Token directive);
     Trivia handleUnconnectedDriveDirective(Token directive);
     Trivia handleNoUnconnectedDriveDirective(Token directive);
     Trivia createSimpleDirective(Token directive);
+    std::pair<Trivia, Trivia> handlePragmaDirective(Token directive);
 
     // Determines whether the else branch of a conditional directive should be taken
     bool shouldTakeElseBranch(SourceLocation location, bool isElseIf, string_view macroName);
@@ -169,18 +177,52 @@ private:
     void checkOutsideDesignElement(Token directive);
 
     // Pragma expression parsers
-    std::pair<PragmaExpressionSyntax*, bool> parsePragmaExpression();
-    std::pair<PragmaExpressionSyntax*, bool> parsePragmaValue();
-    std::pair<PragmaExpressionSyntax*, bool> checkNextPragmaToken();
+    std::pair<syntax::PragmaExpressionSyntax*, bool> parsePragmaExpression();
+    std::pair<syntax::PragmaExpressionSyntax*, bool> parsePragmaValue();
+    std::pair<syntax::PragmaExpressionSyntax*, bool> checkNextPragmaToken();
 
     // Pragma action handlers
-    void applyPragma(const PragmaDirectiveSyntax& pragma);
-    void applyProtectPragma(const PragmaDirectiveSyntax& pragma);
-    void applyResetPragma(const PragmaDirectiveSyntax& pragma);
-    void applyResetAllPragma(const PragmaDirectiveSyntax& pragma);
-    void applyOncePragma(const PragmaDirectiveSyntax& pragma);
-    void applyDiagnosticPragma(const PragmaDirectiveSyntax& pragma);
-    void ensurePragmaArgs(const PragmaDirectiveSyntax& pragma, size_t count);
+    void applyPragma(const syntax::PragmaDirectiveSyntax& pragma,
+                     SmallVectorBase<Token>& skippedTokens);
+    void applyProtectPragma(const syntax::PragmaDirectiveSyntax& pragma,
+                            SmallVectorBase<Token>& skippedTokens);
+    void applyResetPragma(const syntax::PragmaDirectiveSyntax& pragma);
+    void applyResetAllPragma(const syntax::PragmaDirectiveSyntax& pragma);
+    void applyOncePragma(const syntax::PragmaDirectiveSyntax& pragma);
+    void applyDiagnosticPragma(const syntax::PragmaDirectiveSyntax& pragma);
+    void ensurePragmaArgs(const syntax::PragmaDirectiveSyntax& pragma, size_t count);
+    void ensureNoPragmaArgs(Token keyword, const syntax::PragmaExpressionSyntax* args);
+    void resetProtectState();
+
+    // Pragma protect handlers
+    void handleProtectBegin(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                            SmallVectorBase<Token>& skippedTokens);
+    void handleProtectEnd(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                          SmallVectorBase<Token>& skippedTokens);
+    void handleProtectBeginProtected(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                                     SmallVectorBase<Token>& skippedTokens);
+    void handleProtectEndProtected(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                                   SmallVectorBase<Token>& skippedTokens);
+    void handleProtectSingleArgIgnore(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                                      SmallVectorBase<Token>& skippedTokens);
+    void handleProtectEncoding(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                               SmallVectorBase<Token>& skippedTokens);
+    void handleProtectKey(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                          SmallVectorBase<Token>& skippedTokens);
+    void handleProtectBlock(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                            SmallVectorBase<Token>& skippedTokens);
+    void handleProtectLicense(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                              SmallVectorBase<Token>& skippedTokens);
+    void handleProtectReset(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                            SmallVectorBase<Token>& skippedTokens);
+    void handleProtectViewport(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                               SmallVectorBase<Token>& skippedTokens);
+    void handleEncryptedRegion(Token keyword, const syntax::PragmaExpressionSyntax* args,
+                               SmallVectorBase<Token>& skippedTokens, bool isSingleLine);
+
+    // Pragma helpers
+    std::optional<uint32_t> requireUInt32(const syntax::PragmaExpressionSyntax& expr);
+    void skipMacroTokensBeforeProtectRegion(Token directive, SmallVectorBase<Token>& skippedTokens);
 
     // Specifies possible macro intrinsics.
     enum class MacroIntrinsic { None, Line, File };
@@ -188,12 +230,12 @@ private:
     // A saved macro definition; if it came from source code, we will have a parsed
     // DefineDirectiveSyntax. Otherwise, it's an intrinsic macro and we'll note that here.
     struct MacroDef {
-        DefineDirectiveSyntax* syntax = nullptr;
+        const syntax::DefineDirectiveSyntax* syntax = nullptr;
         MacroIntrinsic intrinsic = MacroIntrinsic::None;
         bool builtIn = false;
 
         MacroDef() = default;
-        MacroDef(DefineDirectiveSyntax* syntax) : syntax(syntax) {}
+        MacroDef(const syntax::DefineDirectiveSyntax* syntax) : syntax(syntax) {}
         MacroDef(MacroIntrinsic intrinsic) : intrinsic(intrinsic), builtIn(true) {}
 
         bool valid() const { return syntax || intrinsic != MacroIntrinsic::None; }
@@ -204,8 +246,8 @@ private:
     // Helper class for tracking state used during expansion of a macro.
     class MacroExpansion {
     public:
-        MacroExpansion(SourceManager& sourceManager, BumpAllocator& alloc, SmallVector<Token>& dest,
-                       Token usageSite, bool isTopLevel) :
+        MacroExpansion(SourceManager& sourceManager, BumpAllocator& alloc,
+                       SmallVectorBase<Token>& dest, Token usageSite, bool isTopLevel) :
             sourceManager(sourceManager),
             alloc(alloc), dest(dest), usageSite(usageSite), isTopLevel(isTopLevel) {}
 
@@ -221,7 +263,7 @@ private:
     private:
         SourceManager& sourceManager;
         BumpAllocator& alloc;
-        SmallVector<Token>& dest;
+        SmallVectorBase<Token>& dest;
         Token usageSite;
         bool any = false;
         bool isTopLevel = false;
@@ -229,22 +271,24 @@ private:
 
     // Macro handling methods
     MacroDef findMacro(Token directive);
-    MacroActualArgumentListSyntax* handleTopLevelMacro(Token directive);
+    std::pair<syntax::MacroActualArgumentListSyntax*, Trivia> handleTopLevelMacro(Token directive);
     bool expandMacro(MacroDef macro, MacroExpansion& expansion,
-                     MacroActualArgumentListSyntax* actualArgs);
+                     syntax::MacroActualArgumentListSyntax* actualArgs);
     bool expandIntrinsic(MacroIntrinsic intrinsic, MacroExpansion& expansion);
     bool expandReplacementList(span<Token const>& tokens,
-                               SmallSet<DefineDirectiveSyntax*, 8>& alreadyExpanded);
-    bool applyMacroOps(span<Token const> tokens, SmallVector<Token>& dest);
+                               SmallSet<const syntax::DefineDirectiveSyntax*, 8>& alreadyExpanded);
+    bool applyMacroOps(span<Token const> tokens, SmallVectorBase<Token>& dest);
     void createBuiltInMacro(string_view name, int value, string_view valueStr = {});
 
-    static bool isSameMacro(const DefineDirectiveSyntax& left, const DefineDirectiveSyntax& right);
+    static bool isSameMacro(const syntax::DefineDirectiveSyntax& left,
+                            const syntax::DefineDirectiveSyntax& right);
 
     // functions to advance the underlying token stream
     Token peek();
     Token consume();
     Token expect(TokenKind kind);
     bool peek(TokenKind kind) { return peek().kind == kind; }
+    bool peekSameLine() const;
 
     Diagnostic& addDiag(DiagCode code, SourceLocation location);
     Diagnostic& addDiag(DiagCode code, SourceRange range);
@@ -283,15 +327,15 @@ private:
         // a macro replacement list.
         Token next();
 
-        MacroActualArgumentListSyntax* parseActualArgumentList(Token prevToken);
-        MacroFormalArgumentListSyntax* parseFormalArgumentList();
+        syntax::MacroActualArgumentListSyntax* parseActualArgumentList(Token prevToken);
+        syntax::MacroFormalArgumentListSyntax* parseFormalArgumentList();
 
     private:
         template<typename TFunc>
-        void parseArgumentList(SmallVector<TokenOrSyntax>& buffer, TFunc&& parseItem);
+        void parseArgumentList(SmallVectorBase<syntax::TokenOrSyntax>& buffer, TFunc&& parseItem);
 
-        MacroActualArgumentSyntax* parseActualArgument();
-        MacroFormalArgumentSyntax* parseFormalArgument();
+        syntax::MacroActualArgumentSyntax* parseActualArgument();
+        syntax::MacroFormalArgumentSyntax* parseFormalArgument();
         span<Token> parseTokenList(bool allowNewlines);
 
         Token peek();
@@ -311,16 +355,16 @@ private:
     LexerOptions lexerOptions;
 
     // stack of active lexers; each `include pushes a new lexer
-    std::deque<std::unique_ptr<Lexer>> lexerStack;
+    SmallVector<std::unique_ptr<Lexer>, 2> lexerStack;
 
     // keep track of nested processor branches (ifdef, ifndef, else, elsif, endif)
-    std::deque<BranchEntry> branchStack;
+    SmallVector<BranchEntry, 2> branchStack;
 
     // map from macro name to macro definition
-    std::unordered_map<string_view, MacroDef> macros;
+    flat_hash_map<string_view, MacroDef> macros;
 
     // list of expanded macro tokens to drain before continuing with active lexer
-    SmallVectorSized<Token, 16> expandedTokens;
+    SmallVector<Token> expandedTokens;
     Token* currentMacroToken = nullptr;
 
     // the latest token pulled from a lexer
@@ -335,7 +379,7 @@ private:
     bool inMacroBody = false;
 
     // A buffer used to hold tokens while we're busy consuming them for directives.
-    SmallVectorSized<Token, 16> scratchTokenBuffer;
+    SmallVector<Token> scratchTokenBuffer;
 
     // A set of files (identified by a pointer to the start of their text buffer) that
     // have been marked `pragma once so that we avoid trying to include them more than once.
@@ -343,10 +387,17 @@ private:
 
     /// Various state set by preprocessor directives.
     std::vector<KeywordVersion> keywordVersionStack;
-    optional<TimeScale> activeTimeScale;
+    std::optional<TimeScale> activeTimeScale;
     TokenKind defaultNetType = TokenKind::WireKeyword;
     TokenKind unconnectedDrive = TokenKind::Unknown;
+
     int designElementDepth = 0;
+    uint32_t includeDepth = 0;
+    uint32_t protectEncryptDepth = 0;
+    uint32_t protectDecryptDepth = 0;
+    uint32_t protectLineLength = 0;
+    uint32_t protectBytes = 0;
+    ProtectEncoding protectEncoding = ProtectEncoding::Raw;
 
     // Parser for numeric literals in pragma expressions.
     NumberParser numberParser;
@@ -354,6 +405,11 @@ private:
 
     // Called by NumberParser to handle an error condition.
     void handleExponentSplit(Token token, size_t offset);
+
+    // A map of pragma protect keywords to their handler function.
+    flat_hash_map<string_view, void (Preprocessor::*)(Token, const syntax::PragmaExpressionSyntax*,
+                                                      SmallVectorBase<Token>&)>
+        pragmaProtectHandlers;
 };
 
-} // namespace slang
+} // namespace slang::parsing

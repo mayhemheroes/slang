@@ -2,7 +2,8 @@
 // SyntaxPrinter.cpp
 // Support for printing syntax nodes and tokens
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/syntax/SyntaxPrinter.h"
 
@@ -10,7 +11,9 @@
 #include "slang/syntax/SyntaxTree.h"
 #include "slang/text/SourceManager.h"
 
-namespace slang {
+namespace slang::syntax {
+
+using namespace parsing;
 
 SyntaxPrinter::SyntaxPrinter(const SourceManager& sourceManager) : sourceManager(&sourceManager) {
 }
@@ -61,9 +64,9 @@ SyntaxPrinter& SyntaxPrinter::print(Token token) {
             // Exclude any trivia that is from a preprocessed location as well. In order
             // to know that we need to skip over any trivia that is implicitly located
             // relative to something ahead of it (a directive or the token itself).
-            SmallVectorSized<const Trivia*, 8> pending;
+            SmallVector<const Trivia*> pending;
             for (const auto& trivia : token.trivia()) {
-                pending.append(&trivia);
+                pending.push_back(&trivia);
                 auto loc = trivia.getExplicitLocation();
                 if (loc) {
                     if (!sourceManager->isPreprocessedLoc(*loc)) {
@@ -111,14 +114,15 @@ std::string SyntaxPrinter::printFile(const SyntaxTree& tree) {
         .setIncludeSkipped(true)
         .setIncludeTrivia(true)
         .setIncludePreprocessed(false)
+        .setSquashNewlines(false)
         .print(tree)
         .str();
 }
 
-void SyntaxPrinter::append(string_view text) {
+SyntaxPrinter& SyntaxPrinter::append(string_view text) {
     if (!squashNewlines) {
         buffer.append(text);
-        return;
+        return *this;
     }
 
     bool carriage = false;
@@ -152,6 +156,7 @@ void SyntaxPrinter::append(string_view text) {
     }
 
     buffer.append(text);
+    return *this;
 }
 
-} // namespace slang
+} // namespace slang::syntax

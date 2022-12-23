@@ -1,14 +1,17 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
-#include "slang/compilation/ScriptSession.h"
-#include "slang/symbols/CompilationUnitSymbols.h"
-#include "slang/symbols/InstanceSymbols.h"
-#include "slang/symbols/MemberSymbols.h"
-#include "slang/symbols/ParameterSymbols.h"
-#include "slang/symbols/SubroutineSymbols.h"
-#include "slang/symbols/VariableSymbols.h"
+#include "slang/ast/ScriptSession.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/AllTypes.h"
 #include "slang/syntax/AllSyntax.h"
-#include "slang/types/AllTypes.h"
 
 TEST_CASE("Enum declaration") {
     auto tree = SyntaxTree::fromText(R"(
@@ -179,8 +182,8 @@ endmodule
     CHECK(instance.find("BAR"));
 
     // Try to look up after the parameter but before the function; should fail.
-    CHECK(!instance.lookupName(
-        "SDF", LookupLocation::before(instance.memberAt<TransparentMemberSymbol>(0))));
+    CHECK(!instance.lookupName("SDF", LookupLocation::before(
+                                          instance.memberAt<TransparentMemberSymbol>(0))));
 
     const auto& foshizzle = instance.memberAt<SubroutineSymbol>(5);
     CHECK(instance.lookupName("SDF", LookupLocation::after(foshizzle)));
@@ -440,7 +443,7 @@ endmodule
 
     const auto& fType = instance.find<NetSymbol>("f").getType();
     CHECK(fType.isPackedArray());
-    CHECK(fType.as<PackedArrayType>().range == ConstantRange{ 0, 3 });
+    CHECK(fType.as<PackedArrayType>().range == ConstantRange{0, 3});
 
     NO_COMPILATION_ERRORS;
 }
@@ -457,14 +460,14 @@ endmodule
 
     const auto& fType = instance.find<NetSymbol>("f").getType();
     CHECK(fType.isUnpackedArray());
-    CHECK(fType.as<FixedSizeUnpackedArrayType>().range == ConstantRange{ 0, 2 });
+    CHECK(fType.as<FixedSizeUnpackedArrayType>().range == ConstantRange{0, 2});
 
     const auto& gType = instance.find<NetSymbol>("g").getType();
     CHECK(!gType.isUnpackedArray());
 
     const auto& hType = instance.find<NetSymbol>("h").getType();
     CHECK(hType.isUnpackedArray());
-    CHECK(hType.as<FixedSizeUnpackedArrayType>().range == ConstantRange{ 0, 1 });
+    CHECK(hType.as<FixedSizeUnpackedArrayType>().range == ConstantRange{0, 1});
 
     NO_COMPILATION_ERRORS;
 }
@@ -618,7 +621,7 @@ TEST_CASE("Type matching") {
 
     auto typeof = [&](const std::string& source) {
         auto tree = SyntaxTree::fromText(string_view(source));
-        BindContext context(scope, LookupLocation::max);
+        ASTContext context(scope, LookupLocation::max);
         return Expression::bind(tree->root().as<ExpressionSyntax>(), context).type;
     };
 
@@ -745,7 +748,7 @@ TEST_CASE("Type equivalence") {
 
     auto typeof = [&](const std::string& source) {
         auto tree = SyntaxTree::fromText(string_view(source));
-        BindContext context(scope, LookupLocation::max);
+        ASTContext context(scope, LookupLocation::max);
         return Expression::bind(tree->root().as<ExpressionSyntax>(), context).type;
     };
 
@@ -814,7 +817,7 @@ TEST_CASE("Assignment compatibility") {
 
     auto typeof = [&](const std::string& source) {
         auto tree = SyntaxTree::fromText(string_view(source));
-        BindContext context(scope, LookupLocation::max);
+        ASTContext context(scope, LookupLocation::max);
         return Expression::bind(tree->root().as<ExpressionSyntax>(), context).type;
     };
 
@@ -933,7 +936,7 @@ endmodule
     NO_COMPILATION_ERRORS;
 
     auto& m = compilation.getRoot().lookupName<InstanceSymbol>("m").body;
-    for (auto& name : { "s"s, "u"s, "e"s }) {
+    for (auto& name : {"s"s, "u"s, "e"s}) {
         auto& type = m.find<VariableSymbol>(name).getType();
         REQUIRE(type.isPackedArray());
         CHECK(type.as<PackedArrayType>().range.upper() == 4);
@@ -958,7 +961,7 @@ endmodule
 
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 3);
-    CHECK(diags[0].code == diag::PackedArrayTooLarge);
+    CHECK(diags[0].code == diag::PackedTypeTooLarge);
     CHECK(diags[1].code == diag::PackedArrayNotIntegral);
     CHECK(diags[2].code == diag::PackedDimsRequireFullRange);
 }
@@ -1004,7 +1007,7 @@ endmodule
 
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 2);
-    CHECK(diags[0].code == diag::PackedArrayTooLarge);
+    CHECK(diags[0].code == diag::PackedTypeTooLarge);
     CHECK(diags[1].code == diag::ArrayDimTooLarge);
 }
 
@@ -1744,4 +1747,317 @@ endmodule
     CHECK(diags[8].code == diag::NTResolveUserDef);
     CHECK(diags[9].code == diag::UndeclaredIdentifier);
     CHECK(diags[10].code == diag::NTResolveArgModify);
+}
+
+TEST_CASE("Self referential struct / union member types") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    struct packed { int a; logic [$bits(a)-1:0] b; logic [$bits(a)-1:0] b; } s1;
+    union packed { logic [3:0] a; logic [3:0] b[$bits(a)];logic [$bits(a)-1:0] b; } u1;
+
+    struct { int a; logic [$bits(a)-1:0] b; logic [$bits(a)-1:0] b; } s2;
+    union { int a; logic [$bits(a)-1:0] b; logic [$bits(a)-1:0] b; } u2;
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 5);
+    CHECK(diags[0].code == diag::Redefinition);
+    CHECK(diags[1].code == diag::PackedMemberNotIntegral);
+    CHECK(diags[2].code == diag::Redefinition);
+    CHECK(diags[3].code == diag::Redefinition);
+    CHECK(diags[4].code == diag::Redefinition);
+}
+
+TEST_CASE("DPI import open array types") {
+    auto tree = SyntaxTree::fromText(R"(
+typedef int baz;
+
+import "DPI-C" function void f1(logic[]);
+import "DPI-C" function void f2(enum logic {A,B} [] a);
+import "DPI-C" function void f3(logic a[]);
+import "DPI-C" function void f4(baz [] a[][3][]);
+import "DPI-C" function void f5(output baz [] a[][3][]);
+
+module m;
+    logic [3:0] a;
+    logic b[2][1:-1][4];
+    logic [2:0] c[][3][];
+    initial begin
+        f1(a);
+        f2(a);
+        f3(b[0][-1]);
+        f4(b);
+        f4(c);
+        f5(b);
+        f5(c);
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("DPI import open array errors") {
+    auto tree = SyntaxTree::fromText(R"(
+typedef string baz;
+
+import "DPI-C" function void f1(baz[] a);
+import "DPI-C" function void f2(bit[][1:3]);
+import "DPI-C" function void f3(bit[3:0][]);
+import "DPI-C" function void f4(bit[] a [][2][]);
+import "DPI-C" function void f5(event a [][2][]);
+
+module m;
+    string a;
+    int b[1][2][3];
+    bit c[4][5][6];
+    bit d[4];
+    initial begin
+        f4(a);
+        f4(b);
+        f4(c);
+        f4(d);
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 7);
+    CHECK(diags[0].code == diag::PackedArrayNotIntegral);
+    CHECK(diags[1].code == diag::MultiplePackedOpenArrays);
+    CHECK(diags[2].code == diag::MultiplePackedOpenArrays);
+    CHECK(diags[3].code == diag::InvalidDPIArgType);
+    CHECK(diags[4].code == diag::BadAssignment);
+    CHECK(diags[5].code == diag::BadAssignment);
+    CHECK(diags[6].code == diag::BadAssignment);
+}
+
+TEST_CASE("Virtual interface examples from 25.9") {
+    auto tree = SyntaxTree::fromText(R"(
+interface SBus;
+    logic req, grant;
+    logic [7:0] addr, data;
+endinterface
+
+class SBusTransactor;
+    virtual SBus bus;
+
+    function new( virtual SBus s );
+        bus = s;
+    endfunction
+
+    task request();
+        bus.req <= 1'b1;
+    endtask
+
+    task wait_for_bus();
+        @(posedge bus.grant);
+    endtask
+endclass
+
+module devA( SBus s ); endmodule
+module devB( SBus s ); endmodule
+
+module top;
+    SBus s[1:4] ();
+    devA a1( s[1] );
+    devB b1( s[2] );
+    devA a2( s[3] );
+    devB b2( s[4] );
+
+    initial begin
+        SBusTransactor t[1:4];
+        t[1] = new( s[1] );
+        t[2] = new( s[2] );
+        t[3] = new( s[3] );
+        t[4] = new( s[4] );
+    end
+endmodule
+
+interface PBus #(parameter WIDTH=8);
+    logic req, grant;
+    logic [WIDTH-1:0] addr, data;
+    modport phy(input addr, ref data);
+endinterface
+
+module top2;
+    PBus #(16) p16();
+    PBus #(32) p32();
+    virtual PBus v8;
+    virtual PBus #(35) v35;
+    virtual PBus #(16) v16;
+    virtual PBus #(16).phy v16_phy;
+    virtual PBus #(32) v32;
+    virtual PBus #(32).phy v32_phy;
+    initial begin
+        v16 = p16;
+        v32 = p32;
+        v16 = p32; // illegal – parameter values don't match
+        v16 = v32; // illegal – parameter values don't match
+        v16_phy = v16;
+        v16 = v16_phy; // illegal assignment from selected modport to
+                       // no selected modport
+        v32_phy = p32;
+        v32 = p32.phy; // illegal assignment from selected modport to
+                       // no selected modport
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 4);
+    CHECK(diags[0].code == diag::BadAssignment);
+    CHECK(diags[1].code == diag::BadAssignment);
+    CHECK(diags[2].code == diag::BadAssignment);
+    CHECK(diags[3].code == diag::BadAssignment);
+}
+
+TEST_CASE("Virtual interface connected to interface port") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+    int i;
+    modport m(input i);
+endinterface
+
+module m(I.m a[3][4], I.m b, I c, I d);
+    virtual I i = a;
+    virtual I.m ii = a;
+
+    virtual I arr1[3][4] = a;
+    virtual I.m arr2[3][4] = a;
+    virtual I.m arr3[][4] = a;
+
+    virtual I j = a[0][1];
+    virtual I.m k = a[0][1];
+    virtual I.m l = a.foo;
+    virtual I.m n = a[0];
+
+    virtual I o = b;
+    virtual I.m p = b;
+
+    virtual I q = b.m;
+    virtual I.m r = b.m;
+
+    virtual I s = c;
+    virtual I.m t = c;
+
+    virtual I u = c.m;
+    virtual I.m v = c.m;
+
+    virtual I w = d;
+    virtual I.m x = d;
+
+    virtual I y = d.m;
+    virtual I.m z = d.m;
+endmodule
+
+module top;
+    I i [3][4]();
+    m m1(i, i[0][0], i[0][0], i[0][0].m);
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 11);
+    CHECK(diags[0].code == diag::BadAssignment);
+    CHECK(diags[1].code == diag::BadAssignment);
+    CHECK(diags[2].code == diag::BadAssignment);
+    CHECK(diags[3].code == diag::BadAssignment);
+    CHECK(diags[4].code == diag::CouldNotResolveHierarchicalPath);
+    CHECK(diags[5].code == diag::BadAssignment);
+    CHECK(diags[6].code == diag::BadAssignment);
+    CHECK(diags[7].code == diag::BadAssignment);
+    CHECK(diags[8].code == diag::BadAssignment);
+    CHECK(diags[9].code == diag::BadAssignment);
+    CHECK(diags[10].code == diag::BadAssignment);
+}
+
+TEST_CASE("Virtual interface type restrictions") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+endinterface
+
+interface J;
+  virtual I i;
+endinterface
+
+union { struct { virtual I i; } foo; } asdf;
+
+module m(input struct { virtual I i; } foo);
+  J j();
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 3);
+    CHECK(diags[0].code == diag::VirtualInterfaceIfaceMember);
+    CHECK(diags[1].code == diag::VirtualInterfaceUnionMember);
+    CHECK(diags[2].code == diag::InvalidPortSubType);
+}
+
+TEST_CASE("Max object size tests") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    logic [7:0] foo;
+    logic bar[];
+    int baz[999999999];
+    struct { logic a[2147483647]; logic b[2147483647]; } biz;
+    struct packed { logic [16777214:0] a; logic [16777214:0] b; } boz;
+
+    initial begin
+        $display(foo[2147483647:-2147483647]);
+        $display(bar[-2147483647:2147483647]);
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 6);
+    CHECK(diags[0].code == diag::ObjectTooLarge);
+    CHECK(diags[1].code == diag::ObjectTooLarge);
+    CHECK(diags[2].code == diag::PackedTypeTooLarge);
+    CHECK(diags[3].code == diag::RangeOOB);
+    CHECK(diags[4].code == diag::PackedTypeTooLarge);
+    CHECK(diags[5].code == diag::ObjectTooLarge);
+}
+
+TEST_CASE("Giant string literal overflow") {
+    std::string source = R"(
+module m;
+    parameter p = ")";
+
+    source += std::string(2100000, 'A');
+    source += R"(";
+endmodule
+)";
+
+    auto tree = SyntaxTree::fromText(source);
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::PackedTypeTooLarge);
 }

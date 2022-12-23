@@ -1,11 +1,14 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
 #include <sstream>
 
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
 #include "slang/diagnostics/DiagnosticEngine.h"
 #include "slang/parsing/Parser.h"
 #include "slang/parsing/Preprocessor.h"
-#include "slang/symbols/CompilationUnitSymbols.h"
 #include "slang/text/SourceManager.h"
 
 std::string findTestDir() {
@@ -87,7 +90,7 @@ const ModuleDeclarationSyntax& parseModule(const std::string& text) {
     preprocessor.pushSource(text);
 
     Parser parser(preprocessor);
-    return parser.parseModule();
+    return parser.parseModule().as<ModuleDeclarationSyntax>();
 }
 
 const ClassDeclarationSyntax& parseClass(const std::string& text) {

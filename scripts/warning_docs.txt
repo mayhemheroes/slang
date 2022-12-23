@@ -368,7 +368,7 @@ endmodule
 -Wport-coercion
 An input net port has been coerced to 'inout' direction because it is assigned
 to in the instance body. Alternatively, an output net port has been coerced to
-'inout' direction because it is assigned to externally to the instance.
+'inout' direction because it is assigned externally to the instance.
 ```
 module m(input wire a, output b);
     assign a = 1;
@@ -567,16 +567,6 @@ function string func;
 endfunction
 ```
 
--Wunused-def
-A module, interface, or program definition is unused in the design.
-```
-module m #(parameter int i);
-endmodule
-
-module top;
-endmodule
-```
-
 -Wmissing-top
 No valid top-level modules exist in the design. No top has been instantiated.
 ```
@@ -585,9 +575,6 @@ endmodule
 ```
 
 -Wunknown-warning-option
-<ignored>
-
--Wnot-supported
 <ignored>
 
 -Wreversed-range
@@ -600,4 +587,391 @@ class C;
         a dist { 16 :/ 1, [15:1] :/ 1};
     }
 endclass
+```
+
+-Winvalid-source-encoding
+<ignored>
+
+-Wexpected-protect-keyword
+A `pragma protect directive is missing the protect keyword to set.
+```
+`pragma protect
+```
+
+-Wunknown-protect-keyword
+A `pragma protect directive specified an unknown keyword.
+```
+`pragma protect foobar
+```
+
+-Wexpected-protect-arg
+An invalid argument is passed to a `pragma protect keyword expecting a string value.
+```
+`pragma protect author=3
+```
+
+-Wnested-protect-begin
+Nested `pragma protect begin directives were found, which is disallowed.
+```
+`pragma protect begin
+`pragma protect begin
+```
+
+-Wextra-protect-end
+An unpair `pragma protect end or end_protected was found in the source text.
+```
+`pragma protect end
+```
+
+-Wprotect-arglist
+A `pragma protect keyword expected a list of key=value options but did not receive them.
+```
+`pragma protect encoding=3
+```
+
+-Wunknown-protect-encoding
+The specified encoding name in a `pragma protect encoding directive is not known or supported.
+slang will try to work with the encoded data as though it were raw, which may or may not parse
+correctly depending on how the actual encoding functions.
+```
+`pragma protect encoding=(enctype="foobar")
+```
+
+-Wunknown-protect-option
+An unknown key=value option was passed to a `pragma protect keyword.
+```
+`pragma protect encoding=(enctype="base64", foo="bar")
+```
+
+-Winvalid-pragma-number
+A `pragma protect option expected a valid 32-bit integer value but received something else instead.
+```
+`pragma protect encoding=(enctype="base64", line_length="hello")
+```
+
+-Winvalid-pragma-viewport
+A `pragma protect viewport directive was given invalid options. All such directives must be of
+the form (object = &lt;string>, access = &lt;string>)
+```
+`pragma protect viewport=(not_object = "hello")
+```
+
+-Windex-oob
+An out-of-bounds value was used to index an array. This is an error by default but can be downgraded to
+a warning for compatibility with other tools.
+```
+logic [7:0] a;
+logic b = a[9];
+```
+
+-Wrange-oob
+An out-of-bounds range was used to select from an array. This is an error by default but can be downgraded to
+a warning for compatibility with other tools.
+```
+logic [7:0] a;
+logic [2:0] b = a[9:7];
+```
+
+-Wrange-width-oob
+An indexed part-select has a width that is wider than the bounds of the array it is selecting. This is an error
+by default but can be downgraded to a warning for compatibility with other tools.
+```
+logic [1:0] a;
+int b;
+logic [2:0] c = a[b+:3];
+```
+
+-Wduplicate-definition
+A module has been defined using the same name as a previously defined module. This is an error
+by default but can be downgraded to a warning for compatibility with other tools.
+This applies to both top level modules as well as nested modules (but only duplicated nested modules within the same scope,
+as it is OK to have modules with the same name in different scopes).
+```
+module a;
+endmodule;
+
+module a;
+endmodule
+```
+
+-Wprotect-encoding-bytes
+An encoded block in a protected envelope differed in size from what was specified in
+a prior encoding pragma directive.
+```
+`pragma protect begin_protected
+`pragma protect encoding=(enctype="base64", bytes=6), data_public_key
+asdfas==
+`pragma protect end_protected
+```
+
+-Winvalid-encoding-byte
+A character in an encoded protected envelope is invalid for the kind of encoding specified.
+The rest of the protected envelope will be skipped by searching for an end pragma.
+```
+`pragma protect begin_protected
+`pragma protect encoding=(enctype="base64"), data_block
+asdf()0123
+`pragma protect end_protected
+```
+
+-Wraw-protect-eof
+A "raw" encoded protected envelope did not terminate before the end of the source file.
+```
+`pragma protect encoding=(enctype="raw"), data_block
+asdfasdf
+```
+
+-Wprotected-envelope
+Any use of a pragma protect region in the source will trigger this warning, as slang is
+unable to actually decrypt the contents of that region (it is assumed that no IP vendor
+would be willing to share decryption keys with an open source tool anyway). The text will
+be decoded and skipped in its entirety, which may or may not result in a valid design.
+```
+`pragma protect begin_protected
+`pragma protect encoding=(enctype="raw"), data_block
+asdfasdf
+`pragma protect end_protected
+```
+
+-Wspecify-param
+The LRM disallows using parameters inside of specify blocks. Most tools allow this with
+a warning so slang makes it a warning as well.
+```
+module m(input [1:0] a, output [1:0] b);
+    parameter p = 1;
+    specify
+        (a[p] => b[0]) = 1;
+    endspecify
+endmodule
+```
+
+-Wdup-timing-path
+More than one specify timing path was given for a particular pair of input and output
+terminals in a module.
+```
+module m(input a, output b);
+    specify
+        (a => b) = 1;
+        (a => b) = 2;
+    endspecify
+endmodule
+```
+
+-Winvalid-pulsestyle
+A `pulsestyle` or `showcancelled` declaration targets an output terminal that has
+previously been used in a timing path declaration, which is not allowed according to the LRM.
+```
+module m(input a, output b);
+    specify
+        (a => b) = 1;
+        pulsestyle_ondetect b;
+    endspecify
+endmodule
+```
+
+-Wnegative-timing-limit
+A system timing check parameter that should be positive has a negative value.
+```
+module m(input a, b);
+    specify
+        $setup(posedge a, b, -1);
+    endspecify
+endmodule
+```
+
+-Wunused-def
+A module, interface, or program definition is unused in the design.
+\n\n
+A definition with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular definition.
+```
+module m #(parameter int i);
+endmodule
+
+module top;
+endmodule
+```
+
+-Wunused-net
+A net is declared but never used.
+\n\n
+A net with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular net.
+```
+module m;
+    wire w;
+endmodule
+```
+
+-Wunused-implicit-net
+An implicitly created net is not referenced elsewhere in the design.
+This is often a typo in the name and not intentional.
+\n\n
+A net with name '_' will never warn.
+```
+module m(output x);
+    assign x = 1;
+endmodule
+
+module n;
+    logic typo;
+    m m1(typa);
+endmodule
+```
+
+-Wunused-variable
+A variable is declared but never used.
+\n\n
+A variable with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular variable.
+```
+module m;
+    int i;
+endmodule
+```
+
+-Wundriven-net
+A net is used but never has a value driven.
+\n\n
+A net with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular net.
+```
+module m(output x);
+    wire w;
+    assign x = w;
+endmodule
+```
+
+-Wunassigned-variable
+A variable is used but never has a value assigned.
+\n\n
+A variable with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular variable.
+```
+module m;
+    int i;
+    int j = i;
+endmodule
+```
+
+-Wunused-but-set-net
+A net has a value driven but is never referenced.
+\n\n
+A net with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular net.
+```
+module m;
+    wire x;
+    assign x = 1;
+endmodule
+```
+
+-Wunused-but-set-variable
+A variable has a value assigned but is never referenced.
+\n\n
+A variable with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular variable.
+```
+module m;
+    int i;
+    initial i = 42;
+endmodule
+```
+
+-Wunused-port
+An input port signal is never used internally to the module.
+\n\n
+A port with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular port.
+```
+module m(input x);
+endmodule
+```
+
+-Wundriven-port
+An output port signal is never given a value.
+\n\n
+A port with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular port.
+```
+module m(output x);
+endmodule
+```
+
+-Wunused-argument
+A task or function formal argument is not used in its body.
+\n\n
+An argument with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular argument.
+```
+function foo(int x);
+endfunction
+```
+
+-Wunused-parameter
+A parameter's value is never used.
+\n\n
+A parameter with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular parameter.
+```
+module m #(parameter p = 1);
+endmodule
+```
+
+-Wunused-type-parameter
+A type parameter is never used.
+\n\n
+A parameter with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular parameter.
+```
+module m #(parameter type t = int);
+endmodule
+```
+
+-Wunused-typedef
+A typedef is never used.
+\n\n
+A typedef with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular typedef.
+```
+module m;
+    typedef struct { int a; } foo_t;
+endmodule
+```
+
+-Wunused-genvar
+A genvar is never used.
+\n\n
+A genvar with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular genvar.
+```
+module m;
+    genvar g;
+endmodule
+```
+
+-Wunused-assertion-decl
+An assertion declaration (sequence, property, or let) is never used.
+\n\n
+A declaration with name '_' will never warn. Attributes `(* unused *)` or `(* maybe_unused *)`
+may be applied to suppress this warning for a particular declaration.
+```
+module m;
+    sequence s;
+        1;
+    endsequence
+endmodule
+```
+
+-Wbad-procedural-force
+According to the Verilog/SystemVerilog standard, it is illegal to procedurally force a
+bit-select or range select of a variable (you can do that with a net, or with a plain
+variable). It is an error by default, but can be turned into a warning, to support code
+compatibility with commercial tools that accept this illegal code.
+```
+module m;
+    reg [1:0]r;
+    initial
+        force r[0] = 1'b0;
+endmodule
 ```

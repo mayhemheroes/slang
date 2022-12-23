@@ -2,13 +2,16 @@
 // Parser_statements.cpp
 // Statement-related parsing methods
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/diagnostics/ParserDiags.h"
 #include "slang/parsing/LexerFacts.h"
 #include "slang/parsing/Parser.h"
 
-namespace slang {
+namespace slang::parsing {
+
+using namespace syntax;
 
 StatementSyntax& Parser::parseStatement(bool allowEmpty, bool allowSuperNew) {
     auto dg = setDepthGuard();
@@ -178,8 +181,8 @@ ConditionalStatementSyntax& Parser::parseConditionalStatement(NamedLabelSyntax* 
     auto openParen = expect(TokenKind::OpenParenthesis);
 
     Token closeParen;
-    auto& predicate =
-        parseConditionalPredicate(parseExpression(), TokenKind::CloseParenthesis, closeParen);
+    auto& predicate = parseConditionalPredicate(parseExpression(), TokenKind::CloseParenthesis,
+                                                closeParen);
     auto& statement = parseStatement();
     auto elseClause = parseElseClause();
 
@@ -193,7 +196,7 @@ ConditionalStatementSyntax& Parser::parseConditionalStatement(NamedLabelSyntax* 
 }
 
 template<typename IsItemFunc, typename ParseItemFunc>
-bool Parser::parseCaseItems(TokenKind caseKind, SmallVector<CaseItemSyntax*>& itemBuffer,
+bool Parser::parseCaseItems(TokenKind caseKind, SmallVectorBase<CaseItemSyntax*>& itemBuffer,
                             IsItemFunc&& isItem, ParseItemFunc&& parseItem) {
     SourceLocation lastDefault;
     bool errored = false;
@@ -209,10 +212,10 @@ bool Parser::parseCaseItems(TokenKind caseKind, SmallVector<CaseItemSyntax*>& it
             }
 
             lastDefault = peek().location();
-            itemBuffer.append(&parseDefaultCaseItem());
+            itemBuffer.push_back(&parseDefaultCaseItem());
         }
         else if (isItem(kind)) {
-            itemBuffer.append(parseItem());
+            itemBuffer.push_back(parseItem());
         }
         else if (kind == TokenKind::EndOfFile || isEndKeyword(kind)) {
             break;
@@ -234,7 +237,7 @@ CaseStatementSyntax& Parser::parseCaseStatement(NamedLabelSyntax* label, AttrLis
     auto closeParen = expect(TokenKind::CloseParenthesis);
 
     Token matchesOrInside;
-    SmallVectorSized<CaseItemSyntax*, 16> itemBuffer;
+    SmallVector<CaseItemSyntax*> itemBuffer;
     bool errored = false;
 
     switch (peek().kind) {
@@ -266,7 +269,7 @@ CaseStatementSyntax& Parser::parseCaseStatement(NamedLabelSyntax* label, AttrLis
                 [](auto kind) { return isPossibleOpenRangeElement(kind); },
                 [this] {
                     Token colon;
-                    SmallVectorSized<TokenOrSyntax, 8> buffer;
+                    SmallVector<TokenOrSyntax, 8> buffer;
 
                     parseList<isPossibleOpenRangeElement, isEndOfCaseItem>(
                         buffer, TokenKind::Colon, TokenKind::Comma, colon, RequireItems::True,
@@ -281,7 +284,7 @@ CaseStatementSyntax& Parser::parseCaseStatement(NamedLabelSyntax* label, AttrLis
                 caseKeyword.kind, itemBuffer, [](auto kind) { return isPossibleExpression(kind); },
                 [this] {
                     Token colon;
-                    SmallVectorSized<TokenOrSyntax, 8> buffer;
+                    SmallVector<TokenOrSyntax, 8> buffer;
 
                     parseList<isPossibleExpressionOrComma, isEndOfCaseItem>(
                         buffer, TokenKind::Colon, TokenKind::Comma, colon, RequireItems::True,
@@ -342,9 +345,9 @@ SyntaxNode& Parser::parseForInitializer() {
         auto varKeyword = consumeIf(TokenKind::VarKeyword);
         auto& type = parseDataType();
 
-        return factory.forVariableDeclaration(
-            varKeyword, &type,
-            parseDeclarator(/* allowMinTypMax */ false, /* requireInitializers */ true));
+        return factory.forVariableDeclaration(varKeyword, &type,
+                                              parseDeclarator(/* allowMinTypMax */ false,
+                                                              /* requireInitializers */ true));
     }
 
     return factory.forVariableDeclaration(Token(), nullptr, parseDeclarator());
@@ -356,7 +359,7 @@ ForLoopStatementSyntax& Parser::parseForLoopStatement(NamedLabelSyntax* label,
     auto openParen = expect(TokenKind::OpenParenthesis);
 
     Token semi1;
-    SmallVectorSized<TokenOrSyntax, 4> initializers;
+    SmallVector<TokenOrSyntax, 4> initializers;
 
     if (isVariableDeclaration()) {
         parseList<isPossibleForInitializer, isEndOfParenList>(
@@ -389,7 +392,7 @@ ForLoopStatementSyntax& Parser::parseForLoopStatement(NamedLabelSyntax* label,
     }
 
     Token closeParen;
-    SmallVectorSized<TokenOrSyntax, 4> steps;
+    SmallVector<TokenOrSyntax, 4> steps;
     parseList<isPossibleExpressionOrComma, isEndOfParenList>(
         steps, TokenKind::CloseParenthesis, TokenKind::Comma, closeParen, RequireItems::False,
         diag::ExpectedExpression, [this] { return &parseExpression(); });
@@ -511,7 +514,7 @@ StatementSyntax& Parser::parseAssertionStatement(NamedLabelSyntax* label, AttrLi
             assertionKind = SyntaxKind::ImmediateCoverStatement;
             break;
         default:
-            THROW_UNREACHABLE;
+            ASSUME_UNREACHABLE;
     }
 
     Token keyword = consume();
@@ -529,8 +532,8 @@ StatementSyntax& Parser::parseAssertionStatement(NamedLabelSyntax* label, AttrLi
 
     auto openParen = expect(TokenKind::OpenParenthesis);
     auto& expr = parseExpression();
-    auto& parenExpr =
-        factory.parenthesizedExpression(openParen, expr, expect(TokenKind::CloseParenthesis));
+    auto& parenExpr = factory.parenthesizedExpression(openParen, expr,
+                                                      expect(TokenKind::CloseParenthesis));
     auto& actionBlock = parseActionBlock();
     return factory.immediateAssertionStatement(assertionKind, label, attributes, keyword, deferred,
                                                parenExpr, actionBlock);
@@ -570,7 +573,7 @@ ConcurrentAssertionStatementSyntax& Parser::parseConcurrentAssertion(NamedLabelS
             kind = SyntaxKind::ExpectPropertyStatement;
             break;
         default:
-            THROW_UNREACHABLE;
+            ASSUME_UNREACHABLE;
     }
 
     auto openParen = expect(TokenKind::OpenParenthesis);
@@ -578,8 +581,9 @@ ConcurrentAssertionStatementSyntax& Parser::parseConcurrentAssertion(NamedLabelS
     auto closeParen = expect(TokenKind::CloseParenthesis);
     auto& action = parseActionBlock();
 
-    return factory.concurrentAssertionStatement(
-        kind, label, attributes, keyword, propertyOrSequence, openParen, spec, closeParen, action);
+    return factory.concurrentAssertionStatement(kind, label, attributes, keyword,
+                                                propertyOrSequence, openParen, spec, closeParen,
+                                                action);
 }
 
 PropertySpecSyntax& Parser::parsePropertySpec() {
@@ -593,8 +597,8 @@ PropertySpecSyntax& Parser::parsePropertySpec() {
         auto iff = expect(TokenKind::IffKeyword);
         auto openParen = expect(TokenKind::OpenParenthesis);
         auto& expr = parseExpressionOrDist();
-        disable =
-            &factory.disableIff(keyword, iff, openParen, expr, expect(TokenKind::CloseParenthesis));
+        disable = &factory.disableIff(keyword, iff, openParen, expr,
+                                      expect(TokenKind::CloseParenthesis));
     }
 
     return factory.propertySpec(timing, disable, parsePropertyExpr(0));
@@ -631,7 +635,7 @@ NamedBlockClauseSyntax* Parser::parseNamedBlockClause() {
 }
 
 span<SyntaxNode*> Parser::parseBlockItems(TokenKind endKind, Token& end, bool inConstructor) {
-    SmallVectorSized<SyntaxNode*, 16> buffer;
+    SmallVector<SyntaxNode*, 16> buffer;
     auto kind = peek().kind;
     bool errored = false;
     bool sawStatement = false;
@@ -665,7 +669,7 @@ span<SyntaxNode*> Parser::parseBlockItems(TokenKind endKind, Token& end, bool in
         }
 
         if (newNode) {
-            buffer.append(newNode);
+            buffer.push_back(newNode);
             errored = false;
 
             if (!erroredAboutDecls && !isStmt && sawStatement) {
@@ -728,12 +732,13 @@ WaitOrderStatementSyntax& Parser::parseWaitOrderStatement(NamedLabelSyntax* labe
                                                           AttrList attributes) {
     auto keyword = consume();
     auto openParen = expect(TokenKind::OpenParenthesis);
-    SmallVectorSized<TokenOrSyntax, 4> buffer;
+    SmallVector<TokenOrSyntax, 4> buffer;
 
     Token closeParen;
-    parseList<isIdentifierOrComma, isEndOfParenList>(
-        buffer, TokenKind::CloseParenthesis, TokenKind::Comma, closeParen, RequireItems::True,
-        diag::ExpectedIdentifier, [this] { return &parseName(); });
+    parseList<isIdentifierOrComma, isEndOfParenList>(buffer, TokenKind::CloseParenthesis,
+                                                     TokenKind::Comma, closeParen,
+                                                     RequireItems::True, diag::ExpectedIdentifier,
+                                                     [this] { return &parseName(); });
 
     return factory.waitOrderStatement(label, attributes, keyword, openParen, buffer.copy(alloc),
                                       closeParen, parseActionBlock());
@@ -742,7 +747,7 @@ WaitOrderStatementSyntax& Parser::parseWaitOrderStatement(NamedLabelSyntax* labe
 RandCaseStatementSyntax& Parser::parseRandCaseStatement(NamedLabelSyntax* label,
                                                         AttrList attributes) {
     auto randCase = consume();
-    SmallVectorSized<RandCaseItemSyntax*, 16> itemBuffer;
+    SmallVector<RandCaseItemSyntax*> itemBuffer;
 
     while (isPossibleExpression(peek().kind)) {
         auto& expr = parseExpression();
@@ -753,7 +758,7 @@ RandCaseStatementSyntax& Parser::parseRandCaseStatement(NamedLabelSyntax* label,
             stmt.as<EmptyStatementSyntax>().semicolon.isMissing() && loc == peek().location()) {
             skipToken(std::nullopt);
         }
-        itemBuffer.append(&factory.randCaseItem(expr, colon, stmt));
+        itemBuffer.push_back(&factory.randCaseItem(expr, colon, stmt));
     }
 
     auto endcase = expect(TokenKind::EndCaseKeyword);
@@ -812,7 +817,7 @@ RsCaseSyntax& Parser::parseRsCase() {
     auto& condition = parseExpression();
     auto closeParen = expect(TokenKind::CloseParenthesis);
 
-    SmallVectorSized<RsCaseItemSyntax*, 8> itemBuffer;
+    SmallVector<RsCaseItemSyntax*> itemBuffer;
     SourceLocation lastDefault;
     bool errored = false;
 
@@ -831,18 +836,19 @@ RsCaseSyntax& Parser::parseRsCase() {
             auto colon = consumeIf(TokenKind::Colon);
             auto& item = parseRsProdItem();
             auto semi = expect(TokenKind::Semicolon);
-            itemBuffer.append(&factory.defaultRsCaseItem(def, colon, item, semi));
+            itemBuffer.push_back(&factory.defaultRsCaseItem(def, colon, item, semi));
         }
         else if (isPossibleExpression(kind)) {
             Token colon;
-            SmallVectorSized<TokenOrSyntax, 8> buffer;
+            SmallVector<TokenOrSyntax, 8> buffer;
             parseList<isPossibleExpressionOrComma, isEndOfCaseItem>(
                 buffer, TokenKind::Colon, TokenKind::Comma, colon, RequireItems::True,
                 diag::ExpectedExpression, [this] { return &parseExpression(); });
 
             auto& item = parseRsProdItem();
             auto semi = expect(TokenKind::Semicolon);
-            itemBuffer.append(&factory.standardRsCaseItem(buffer.copy(alloc), colon, item, semi));
+            itemBuffer.push_back(
+                &factory.standardRsCaseItem(buffer.copy(alloc), colon, item, semi));
         }
         else {
             break;
@@ -912,13 +918,13 @@ RsRuleSyntax& Parser::parseRsRule() {
         randJoin = &factory.randJoinClause(rand, join, parenExpr);
     }
 
-    SmallVectorSized<RsProdSyntax*, 16> prods;
+    SmallVector<RsProdSyntax*> prods;
     while (true) {
         auto prod = parseRsProd();
         if (!prod)
             break;
 
-        prods.append(prod);
+        prods.push_back(prod);
         if (randJoin && prod->kind != SyntaxKind::RsProdItem)
             addDiag(diag::RandJoinProdItem, prod->sourceRange());
     }
@@ -926,7 +932,7 @@ RsRuleSyntax& Parser::parseRsRule() {
     if (randJoin && prods.size() < 2) {
         SourceRange range = randJoin->sourceRange();
         if (!prods.empty())
-            range = SourceRange{ range.start(), prods.back()->getLastToken().range().end() };
+            range = SourceRange{range.start(), prods.back()->getLastToken().range().end()};
 
         addDiag(diag::RandJoinNotEnough, range);
     }
@@ -962,7 +968,7 @@ ProductionSyntax& Parser::parseProduction() {
     auto colon = expect(TokenKind::Colon);
 
     Token semi;
-    SmallVectorSized<TokenOrSyntax, 8> buffer;
+    SmallVector<TokenOrSyntax, 8> buffer;
     parseList<isPossibleRsRule, isSemicolon>(buffer, TokenKind::Semicolon, TokenKind::Or, semi,
                                              RequireItems::True, diag::ExpectedRsRule,
                                              [this] { return &parseRsRule(); });
@@ -976,9 +982,9 @@ StatementSyntax& Parser::parseRandSequenceStatement(NamedLabelSyntax* label, Att
     auto firstProd = consumeIf(TokenKind::Identifier);
     auto closeParen = expect(TokenKind::CloseParenthesis);
 
-    SmallVectorSized<ProductionSyntax*, 16> productions;
+    SmallVector<ProductionSyntax*> productions;
     while (isPossibleDataType(peek().kind))
-        productions.append(&parseProduction());
+        productions.push_back(&parseProduction());
 
     if (productions.empty())
         addDiag(diag::ExpectedRsRule, peek().location());
@@ -1006,4 +1012,4 @@ void Parser::checkEmptyBody(const SyntaxNode& syntax, Token prevToken, string_vi
     addDiag(diag::EmptyBody, ess.semicolon.location()) << syntaxName;
 }
 
-} // namespace slang
+} // namespace slang::parsing

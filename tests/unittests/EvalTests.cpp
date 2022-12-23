@@ -1,8 +1,11 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 #include <catch2/catch_approx.hpp>
 using Catch::Approx;
 
-#include "slang/compilation/ScriptSession.h"
+#include "slang/ast/ScriptSession.h"
 
 TEST_CASE("Simple eval") {
     ScriptSession session;
@@ -132,6 +135,38 @@ endfunction
     auto elseValue = session.eval("foo(2)");
     CHECK(elseValue.integer() == 5);
     NO_SESSION_ERRORS;
+
+    SECTION("None if match") {
+        ScriptSession session;
+        session.eval(R"(
+function logic [15:0] foo(int a);
+    unique if (a == 3)
+        return 4;
+    else if (a < 4)
+        return 5;
+endfunction
+)");
+        auto value = session.eval("foo(10)");
+        auto diags = session.getDiagnostics();
+        REQUIRE(diags.size() == 1);
+        CHECK(diags[0].code == diag::ConstEvalNoIfItemsMatched);
+    }
+
+    SECTION("Not unique if match") {
+        ScriptSession session;
+        session.eval(R"(
+function logic [15:0] foo(int a);
+    unique if (a == 3)
+        return 4;
+    else if (a < 4)
+        return 5;
+endfunction
+)");
+        auto value = session.eval("foo(3)");
+        auto diags = session.getDiagnostics();
+        REQUIRE(diags.size() == 1);
+        CHECK(diags[0].code == diag::ConstEvalIfItemsNotUnique);
+    }
 }
 
 TEST_CASE("Eval for loop") {
@@ -224,14 +259,6 @@ TEST_CASE("Integer operators") {
     // Wildcard equality
     EVAL("5'b11001 ==? {1'b1 / 1'b0, 4'b1001}", 1);
     EVAL("({1'b1 / 1'b0, 4'b1001} ==? 5'b11001) === 'x", 1);
-
-    // Bit selects
-    EVAL("3'd7[2]", 1);
-    EVAL("5'd25[3:0]", 9);
-    EVAL("5'd25[3:1]", 4);
-    EVAL("65'h1ffffffffffffffff[64:62]", "3'b111"_si);
-    EVAL("5'd25[0 +: 4]", 9);
-    EVAL("5'd25[3 -: 4]", 9);
 
 #undef EVAL
     NO_SESSION_ERRORS;
@@ -1564,6 +1591,11 @@ TEST_CASE("Bit vector functions") {
     CHECK(session.eval("$isunknown(14'b101010101)").integer() == 0);
     CHECK(session.eval("$isunknown(14'b101z10101)").integer() == 1);
 
+    session.eval("struct { int i; logic j[]; } foo = '{42, '{'x, 1, 0}};");
+    CHECK(session.eval("$countbits(foo, '1, 'x)").integer() == 5);
+    CHECK(session.eval("$countones(foo)").integer() == 4);
+    CHECK(session.eval("$isunknown(foo)").integer() == 1);
+
     NO_SESSION_ERRORS;
 }
 
@@ -1600,7 +1632,7 @@ TEST_CASE("Array query functions") {
     EVAL("$low(arr, k)", SVInt::createFillX(32, true));
     EVAL("$increment(arr, 3)", 1);
 
-    for (auto& func : { "$left", "$right", "$low", "$high", "$increment", "$size" }) {
+    for (auto& func : {"$left", "$right", "$low", "$high", "$increment", "$size"}) {
         EVAL(func + "(arr, j)"s, SVInt::createFillX(32, true));
     }
 
@@ -2316,6 +2348,12 @@ struct {
                                             "[[[1,1],64'h2,6'b10,32'd2,[[3.14],[3.14]]],"
                                             "[[1,1],64'h2,6'b10,32'd2,[[3.14],[3.14]]]]]");
 
+    session.eval("int q[$] = '{3{5}};");
+    CHECK(session.eval("q").toString() == "[5,5,5]");
+
+    session.eval("logic [11:0] r = '{12{4'd3}};");
+    CHECK(session.eval("r").integer() == 4095);
+
     NO_SESSION_ERRORS;
 }
 
@@ -2453,4 +2491,25 @@ endfunction
     REQUIRE(diags.size() == 2);
     CHECK(diags[0].code == diag::ConstEvalNoCaseItemsMatched);
     CHECK(diags[1].code == diag::ConstEvalCaseItemsNotUnique);
+}
+
+TEST_CASE("case statement eval regression") {
+    ScriptSession session;
+    session.eval(R"(
+function automatic int calc(int p);
+    case (p)
+        100,200:
+            return 1;
+        300:
+            return 2;
+    endcase
+    return 0;
+endfunction
+)");
+
+    CHECK(session.eval("calc(100);").integer() == 1);
+    CHECK(session.eval("calc(200);").integer() == 1);
+    CHECK(session.eval("calc(300);").integer() == 2);
+    CHECK(session.eval("calc(400);").integer() == 0);
+    NO_SESSION_ERRORS;
 }

@@ -2,11 +2,12 @@
 //! @file SVInt.h
 //! @brief Arbitrary precision integer support
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //-----------------------------------------------------------------------------
 #pragma once
 
-#include <ostream>
+#include <iosfwd>
 
 #include "slang/numeric/MathUtils.h"
 #include "slang/util/SmallVector.h"
@@ -33,7 +34,7 @@ bool literalBaseFromChar(char base, LiteralBase& result);
 /// Represents a single 4-state bit. The usual bit values of 0 and 1 are
 /// augmented with X (unknown) and Z (high impedance). Both X and Z are
 /// considered "unknown" for most computation purposes.
-struct logic_t {
+struct SLANG_EXPORT logic_t {
     // limited from 0 to 15, plus x or z
     uint8_t value;
 
@@ -94,12 +95,12 @@ struct logic_t {
         return !isUnknown() && value != 0;
     }
 
-    friend bool exactlyEqual(logic_t lhs, logic_t rhs) {
+    SLANG_EXPORT friend bool exactlyEqual(logic_t lhs, logic_t rhs) {
         return lhs.value == rhs.value;
     }
 
     char toChar() const;
-    friend std::ostream& operator<<(std::ostream& os, const logic_t& rhs);
+    SLANG_EXPORT friend std::ostream& operator<<(std::ostream& os, const logic_t& rhs);
 
     static constexpr uint8_t X_VALUE = 1 << 7;
     static constexpr uint8_t Z_VALUE = 1 << 6;
@@ -110,7 +111,7 @@ struct logic_t {
 /// POD base class for SVInt that contains all data members. The purpose of this
 /// is so that other types can manage the backing memory for SVInts with really
 /// large bit widths.
-class SVIntStorage {
+class SLANG_EXPORT SVIntStorage {
 public:
     SVIntStorage() : val(0), bitWidth(1), signFlag(false), unknownFlag(false) {}
     SVIntStorage(bitwidth_t bits, bool signFlag, bool unknownFlag) :
@@ -145,7 +146,7 @@ public:
 /// words are allocated adjacent in memory. The bits in these extra words indicate whether the
 /// corresponding bits in the low words are unknown or normal.
 ///
-class SVInt : SVIntStorage {
+class SLANG_EXPORT SVInt : SVIntStorage {
 public:
     /// Simple default constructor for convenience, results in a 1 bit zero value.
     SVInt() {}
@@ -239,7 +240,7 @@ public:
     /// Checks whether it's possible to convert the value to a simple built-in
     /// integer type and if so returns it.
     template<typename T, typename = std::enable_if_t<std::is_integral_v<T> || std::is_enum_v<T>>>
-    optional<T> as() const {
+    std::optional<T> as() const {
         bitwidth_t bits = getMinRepresentedBits();
         if (unknownFlag || bits > sizeof(T) * CHAR_BIT)
             return std::nullopt;
@@ -295,11 +296,17 @@ public:
     static SVInt createFillZ(bitwidth_t bitWidth, bool isSigned);
 
     [[nodiscard]] size_t hash() const;
-    void writeTo(SmallVector<char>& buffer, LiteralBase base) const;
-    void writeTo(SmallVector<char>& buffer, LiteralBase base, bool includeBase) const;
-    std::string toString() const;
-    std::string toString(LiteralBase base) const;
-    std::string toString(LiteralBase base, bool includeBase) const;
+    void writeTo(SmallVectorBase<char>& buffer, LiteralBase base,
+                 bitwidth_t abbreviateThresholdBits = DefaultStringAbbreviationThresholdBits) const;
+    void writeTo(SmallVectorBase<char>& buffer, LiteralBase base, bool includeBase,
+                 bitwidth_t abbreviateThresholdBits = MAX_BITS) const;
+    std::string toString(
+        bitwidth_t abbreviateThresholdBits = DefaultStringAbbreviationThresholdBits,
+        bool exactUnknowns = false) const;
+    std::string toString(LiteralBase base, bitwidth_t abbreviateThresholdBits =
+                                               DefaultStringAbbreviationThresholdBits) const;
+    std::string toString(LiteralBase base, bool includeBase,
+                         bitwidth_t abbreviateThresholdBits = MAX_BITS) const;
 
     /// Power function. Note that the result will have the same bitwidth
     /// as this object. The value will be modulo the bit width.
@@ -519,22 +526,22 @@ public:
 
     /// Stream formatting operator. Guesses a nice base to use and writes the string representation
     /// into the stream.
-    friend std::ostream& operator<<(std::ostream& os, const SVInt& rhs);
+    SLANG_EXPORT friend std::ostream& operator<<(std::ostream& os, const SVInt& rhs);
 
     /// Stricter equality, taking into account unknown bits.
-    friend bool exactlyEqual(const SVInt& lhs, const SVInt& rhs);
+    SLANG_EXPORT friend bool exactlyEqual(const SVInt& lhs, const SVInt& rhs);
 
     /// Wildcard based equality, with unknown bits as wildcards.
     /// This method only looks for wildcard bits on the rhs, as needed by the conditional operator.
-    friend logic_t condWildcardEqual(const SVInt& lhs, const SVInt& rhs);
+    SLANG_EXPORT friend logic_t condWildcardEqual(const SVInt& lhs, const SVInt& rhs);
 
     /// Wildcard based equality, with unknown bits as wildcards.
     /// This method implements matching as required by casex statements.
-    friend bool caseXWildcardEqual(const SVInt& lhs, const SVInt& rhs);
+    SLANG_EXPORT friend bool caseXWildcardEqual(const SVInt& lhs, const SVInt& rhs);
 
     /// Wildcard based equality, with Z bits as wildcards.
     /// This method implements matching as required by casez statements.
-    friend bool caseZWildcardEqual(const SVInt& lhs, const SVInt& rhs);
+    SLANG_EXPORT friend bool caseZWildcardEqual(const SVInt& lhs, const SVInt& rhs);
 
     enum {
         BITS_PER_WORD = sizeof(uint64_t) * CHAR_BIT,
@@ -545,6 +552,11 @@ public:
 
     static const SVInt Zero;
     static const SVInt One;
+
+    /// The default threshold, in bits, to use for abbreviating toString results
+    /// when calling one of the simple toString() methods without passing a user
+    /// provided threshold.
+    static constexpr bitwidth_t DefaultStringAbbreviationThresholdBits = 128;
 
 private:
     // fast internal constructors to just set fields on new values
@@ -668,7 +680,7 @@ inline logic_t SVInt::logicalEquiv(const SVInt& lhs, const SVInt& rhs) {
 }
 
 /// Returns the ceiling of the log_2 of the value. If value is zero, returns zero.
-inline uint32_t clog2(const SVInt& v) {
+inline SLANG_EXPORT uint32_t clog2(const SVInt& v) {
     if (v == 0)
         return 0;
     return v.getBitWidth() - (v - SVInt::One).countLeadingZeros();

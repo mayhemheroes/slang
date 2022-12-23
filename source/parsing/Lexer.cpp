@@ -2,24 +2,31 @@
 // Lexer.cpp
 // Source file lexer
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/parsing/Lexer.h"
 
-#include "../text/CharInfo.h"
 #include <algorithm>
 #include <cmath>
+#include <fmt/core.h>
 
 #include "slang/diagnostics/LexerDiags.h"
 #include "slang/diagnostics/NumericDiags.h"
 #include "slang/syntax/SyntaxNode.h"
+#include "slang/text/CharInfo.h"
 #include "slang/text/SourceManager.h"
 #include "slang/util/BumpAllocator.h"
+#include "slang/util/ScopeGuard.h"
 #include "slang/util/String.h"
 
 static_assert(std::numeric_limits<double>::is_iec559, "SystemVerilog requires IEEE 754");
 
-namespace slang {
+static const double BitsPerDecimal = log2(10.0);
+
+namespace slang::parsing {
+
+using namespace syntax;
 
 using LF = LexerFacts;
 
@@ -37,7 +44,7 @@ Lexer::Lexer(BufferID bufferId, string_view source, const char* startPtr, BumpAl
     ASSERT(count);
     ASSERT(sourceEnd[-1] == '\0');
 
-    // detect BOMs so we can give nice errors for invaild encoding
+    // detect BOMs so we can give nice errors for invalid encoding
     if (count >= 2) {
         const unsigned char* ubuf = reinterpret_cast<const unsigned char*>(sourceBuffer);
         if ((ubuf[0] == 0xFF && ubuf[1] == 0xFE) || (ubuf[0] == 0xFE && ubuf[1] == 0xFF)) {
@@ -46,11 +53,9 @@ Lexer::Lexer(BufferID bufferId, string_view source, const char* startPtr, BumpAl
             advance(2);
         }
         else if (count >= 3) {
-            if (ubuf[0] == 0xEF && ubuf[1] == 0xBB && ubuf[2] == 0xBF) {
-                errorCount++;
-                addDiag(diag::UnicodeBOM, 0);
+            // Silently skip the UTF8 BOM.
+            if (ubuf[0] == 0xEF && ubuf[1] == 0xBB && ubuf[2] == 0xBF)
                 advance(3);
-            }
         }
     }
 }
@@ -72,12 +77,11 @@ Token Lexer::concatenateTokens(BumpAllocator& alloc, Token left, Token right) {
     leftText.copy(mem, leftText.length());
     rightText.copy(mem + leftText.length(), rightText.length());
     mem[newLength - 1] = '\0';
-    string_view combined{ mem, newLength };
+    string_view combined{mem, newLength};
 
     Diagnostics unused;
     Lexer lexer{
-        BufferID::getPlaceholder(), combined, combined.data(), alloc, unused, LexerOptions{}
-    };
+        BufferID::getPlaceholder(), combined, combined.data(), alloc, unused, LexerOptions{}};
 
     auto token = lexer.lex();
     if (token.kind == TokenKind::Unknown || token.rawText().empty())
@@ -93,44 +97,44 @@ Token Lexer::concatenateTokens(BumpAllocator& alloc, Token left, Token right) {
 
 Token Lexer::stringify(BumpAllocator& alloc, SourceLocation location, span<Trivia const> trivia,
                        Token* begin, Token* end) {
-    SmallVectorSized<char, 64> text;
-    text.append('"');
+    SmallVector<char> text;
+    text.push_back('"');
 
     while (begin != end) {
         Token cur = *begin;
 
         for (const Trivia& t : cur.trivia()) {
             if (t.kind == TriviaKind::Whitespace)
-                text.appendRange(t.getRawText());
+                text.append(t.getRawText());
         }
 
         if (cur.kind == TokenKind::MacroEscapedQuote) {
-            text.append('\\');
-            text.append('"');
+            text.push_back('\\');
+            text.push_back('"');
         }
         else if (cur.kind == TokenKind::StringLiteral) {
-            text.append('\\');
-            text.append('"');
+            text.push_back('\\');
+            text.push_back('"');
 
             auto raw = cur.rawText();
             if (raw.size() > 2)
-                text.appendRange(raw.substr(1, raw.size() - 2));
+                text.append(raw.substr(1, raw.size() - 2));
 
-            text.append('\\');
-            text.append('"');
+            text.push_back('\\');
+            text.push_back('"');
         }
         else if (cur.kind != TokenKind::EmptyMacroArgument) {
-            text.appendRange(cur.rawText());
+            text.append(cur.rawText());
         }
         begin++;
     }
-    text.append('"');
-    text.append('\0');
+    text.push_back('"');
+    text.push_back('\0');
 
     string_view raw = toStringView(text.copy(alloc));
 
     Diagnostics unused;
-    Lexer lexer{ BufferID::getPlaceholder(), raw, raw.data(), alloc, unused, LexerOptions{} };
+    Lexer lexer{BufferID::getPlaceholder(), raw, raw.data(), alloc, unused, LexerOptions{}};
 
     auto token = lexer.lex();
     ASSERT(token.kind == TokenKind::StringLiteral);
@@ -140,23 +144,23 @@ Token Lexer::stringify(BumpAllocator& alloc, SourceLocation location, span<Trivi
 }
 
 Trivia Lexer::commentify(BumpAllocator& alloc, Token* begin, Token* end) {
-    SmallVectorSized<char, 64> text;
+    SmallVector<char> text;
     while (begin != end) {
         Token cur = *begin;
         for (const Trivia& t : cur.trivia())
-            text.appendRange(t.getRawText());
+            text.append(t.getRawText());
 
         if (cur.kind != TokenKind::EmptyMacroArgument)
-            text.appendRange(cur.rawText());
+            text.append(cur.rawText());
 
         begin++;
     }
-    text.append('\0');
+    text.push_back('\0');
 
     string_view raw = toStringView(text.copy(alloc));
 
     Diagnostics unused;
-    Lexer lexer{ BufferID::getPlaceholder(), raw, raw.data(), alloc, unused, LexerOptions{} };
+    Lexer lexer{BufferID::getPlaceholder(), raw, raw.data(), alloc, unused, LexerOptions{}};
 
     auto token = lexer.lex();
     ASSERT(token.kind == TokenKind::EndOfFile);
@@ -167,7 +171,7 @@ Trivia Lexer::commentify(BumpAllocator& alloc, Token* begin, Token* end) {
 
 void Lexer::splitTokens(BumpAllocator& alloc, Diagnostics& diagnostics,
                         const SourceManager& sourceManager, Token sourceToken, size_t offset,
-                        KeywordVersion keywordVersion, SmallVector<Token>& results) {
+                        KeywordVersion keywordVersion, SmallVectorBase<Token>& results) {
     auto loc = sourceToken.location();
     if (sourceManager.isMacroLoc(loc))
         loc = sourceManager.getOriginalLoc(loc);
@@ -175,8 +179,8 @@ void Lexer::splitTokens(BumpAllocator& alloc, Diagnostics& diagnostics,
     auto sourceText = sourceManager.getSourceText(loc.buffer());
     ASSERT(!sourceText.empty());
 
-    Lexer lexer{ loc.buffer(), sourceText,  sourceToken.rawText().substr(offset).data(),
-                 alloc,        diagnostics, LexerOptions{} };
+    Lexer lexer{loc.buffer(), sourceText,  sourceToken.rawText().substr(offset).data(),
+                alloc,        diagnostics, LexerOptions{}};
 
     size_t endOffset = loc.offset() + sourceToken.rawText().length();
     while (true) {
@@ -185,13 +189,13 @@ void Lexer::splitTokens(BumpAllocator& alloc, Diagnostics& diagnostics,
             token.location().offset() >= endOffset)
             break;
 
-        results.append(token);
+        results.push_back(token);
     }
 }
 
 Token Lexer::lex(KeywordVersion keywordVersion) {
     triviaBuffer.clear();
-    lexTrivia();
+    lexTrivia<false>();
 
     // lex the next token
     mark();
@@ -202,12 +206,53 @@ Token Lexer::lex(KeywordVersion keywordVersion) {
         addDiag(diag::TooManyLexerErrors, currentOffset());
         sourceBuffer = sourceEnd - 1;
 
-        triviaBuffer.append(Trivia(TriviaKind::DisabledText, lexeme()));
+        triviaBuffer.push_back(Trivia(TriviaKind::DisabledText, lexeme()));
         return Token(alloc, TokenKind::EndOfFile, triviaBuffer.copy(alloc), token.rawText(),
                      token.location());
     }
 
     return token;
+}
+
+bool Lexer::isNextTokenOnSameLine() {
+    auto guard = ScopeGuard([this, currBuff = sourceBuffer] { sourceBuffer = currBuff; });
+
+    while (true) {
+        switch (peek()) {
+            case ' ':
+            case '\t':
+            case '\v':
+            case '\f':
+                advance();
+                break;
+            case '/':
+                switch (peek(1)) {
+                    case '/':
+                        return false;
+                    case '*':
+                        advance(2);
+                        scanBlockComment();
+                        break;
+                    default:
+                        return true;
+                }
+                break;
+            case '\0':
+            case '\r':
+            case '\n':
+                return false;
+            default:
+                return true;
+        }
+    }
+}
+
+Token Lexer::lexEncodedText(ProtectEncoding encoding, uint32_t expectedBytes, bool singleLine) {
+    triviaBuffer.clear();
+    lexTrivia<true>();
+    mark();
+    scanEncodedText(encoding, expectedBytes, singleLine);
+    return create(TokenKind::Unknown);
 }
 
 Token Lexer::lexToken(KeywordVersion keywordVersion) {
@@ -570,21 +615,26 @@ Token Lexer::lexToken(KeywordVersion keywordVersion) {
             return create(TokenKind::Tilde);
         default:
             errorCount++;
-            if (isASCII(c))
+            if (isASCII(c)) {
                 addDiag(diag::NonPrintableChar, currentOffset() - 1);
+            }
             else {
-                addDiag(diag::UTF8Char, currentOffset() - 1);
+                sourceBuffer--;
+                addDiag(diag::UTF8Char, currentOffset());
 
-                // skip over UTF-8 sequences
-                int skip = utf8SeqBytes(c);
-                advance(std::min((int)(sourceEnd - sourceBuffer - 1), skip));
+                bool sawUTF8Error = false;
+                do {
+                    uint32_t unused;
+                    sawUTF8Error |= !scanUTF8Char(sawUTF8Error, &unused);
+                } while (!isASCII(peek()));
             }
             return create(TokenKind::Unknown);
     }
 }
 
 Token Lexer::lexStringLiteral() {
-    SmallVectorSized<char, 128> stringBuffer;
+    stringBuffer.clear();
+    bool sawUTF8Error = false;
     while (true) {
         size_t offset = currentOffset();
         char c = peek();
@@ -597,13 +647,13 @@ Token Lexer::lexStringLiteral() {
             uint32_t charCode;
             switch (c) {
                     // clang-format off
-                case 'n': stringBuffer.append('\n'); break;
-                case 't': stringBuffer.append('\t'); break;
-                case '\\': stringBuffer.append('\\'); break;
-                case '"': stringBuffer.append('"'); break;
-                case 'v': stringBuffer.append('\v'); break;
-                case 'f': stringBuffer.append('\f'); break;
-                case 'a': stringBuffer.append('\a'); break;
+                case 'n': stringBuffer.push_back('\n'); break;
+                case 't': stringBuffer.push_back('\t'); break;
+                case '\\': stringBuffer.push_back('\\'); break;
+                case '"': stringBuffer.push_back('"'); break;
+                case 'v': stringBuffer.push_back('\v'); break;
+                case 'f': stringBuffer.push_back('\f'); break;
+                case 'a': stringBuffer.push_back('\a'); break;
                 case '\n': break;
                 case '\r': consume('\n'); break;
                 case '0': case '1': case '2': case '3':
@@ -623,14 +673,14 @@ Token Lexer::lexStringLiteral() {
                             }
                         }
                     }
-                    stringBuffer.append((char)charCode);
+                    stringBuffer.push_back((char)charCode);
                     break;
                 case 'x':
                     c = peek();
                     advance();
                     if (!isHexDigit(c)) {
                         addDiag(diag::InvalidHexEscapeCode, offset);
-                        stringBuffer.append(c);
+                        stringBuffer.push_back(c);
                     }
                     else {
                         charCode = getHexDigitValue(c);
@@ -638,17 +688,31 @@ Token Lexer::lexStringLiteral() {
                             advance();
                             charCode = (charCode * 16) + getHexDigitValue(c);
                         }
-                        stringBuffer.append((char)charCode);
+                        stringBuffer.push_back((char)charCode);
                     }
                     break;
                 default: {
-                    // '\%' is not an actual escape code but other tools silently allow it
-                    // and major UVM headers use it, so we'll issue a (fairly quiet) warning about
-                    // it. Otherwise issue a louder warning (on by default).
-                    DiagCode code =
-                        c == '%' ? diag::NonstandardEscapeCode : diag::UnknownEscapeCode;
-                    addDiag(code, offset) << c;
-                    stringBuffer.append(c);
+                    auto curr = --sourceBuffer;
+
+                    uint32_t unicodeChar;
+                    if (scanUTF8Char(sawUTF8Error, &unicodeChar)) {
+                        if (isPrintableUnicode(unicodeChar)) {
+                            // '\%' is not an actual escape code but other tools silently allow it
+                            // and major UVM headers use it, so we'll issue a (fairly quiet) warning
+                            // about it. Otherwise issue a louder warning (on by default).
+                            DiagCode code = c == '%' ? diag::NonstandardEscapeCode
+                                                     : diag::UnknownEscapeCode;
+                            addDiag(code, offset)
+                                << string_view(curr, (size_t)utf8Len((unsigned char)c));
+                        }
+                    }
+                    else {
+                        sawUTF8Error = true;
+                    }
+
+                    // Back up so that we handle this character as a normal char in the outer loop,
+                    // regardless of whether it's valid or not.
+                    sourceBuffer = curr;
                     break;
                 }
             }
@@ -672,9 +736,27 @@ Token Lexer::lexStringLiteral() {
             addDiag(diag::EmbeddedNull, offset);
             advance();
         }
-        else {
+        else if (isASCII(c)) {
             advance();
-            stringBuffer.append(c);
+            stringBuffer.push_back(c);
+            sawUTF8Error = false;
+        }
+        else {
+            auto curr = sourceBuffer;
+
+            uint32_t unused;
+            sawUTF8Error |= !scanUTF8Char(sawUTF8Error, &unused);
+
+            // Regardless of whether the character sequence was valid or not
+            // we want to add the bytes to the string, to allow for cases where
+            // the source is actually something like latin-1 encoded. Ignoring the
+            // warning and carrying on will do the right thing for them.
+            int len = utf8Len((unsigned char)c);
+            if (len == 0)
+                len = 1;
+
+            for (int i = 0; i < len; i++)
+                stringBuffer.push_back(curr[i]);
         }
     }
 
@@ -696,7 +778,7 @@ Token Lexer::lexEscapeSequence(bool isMacroName) {
         return create(TokenKind::Unknown);
     }
 
-    while (isPrintable(c)) {
+    while (isPrintableASCII(c)) {
         advance();
         c = peek();
         if (isWhitespace(c))
@@ -768,8 +850,8 @@ Token Lexer::lexNumericLiteral() {
     // instead. Since we expect many more ints than floats, it makes sense to
     // not waste time populating that array up front.
     size_t startOfNum = currentOffset();
-    SmallVectorSized<logic_t, 32> digits;
-    SmallVectorSized<char, 32> floatChars;
+    SmallVector<logic_t> digits;
+    SmallVector<char> floatChars;
 
     while (true) {
         char c = peek();
@@ -778,17 +860,17 @@ Token Lexer::lexNumericLiteral() {
         else if (!isDecimalDigit(c))
             break;
         else {
-            digits.append(logic_t(getDigitValue(c)));
+            digits.push_back(logic_t(getDigitValue(c)));
             advance();
         }
     }
 
     auto populateChars = [&]() {
         if (digits.empty())
-            floatChars.append('0');
+            floatChars.push_back('0');
         else {
             for (auto d : digits)
-                floatChars.append(char((char)d.value + '0'));
+                floatChars.push_back(char((char)d.value + '0'));
         }
     };
 
@@ -796,7 +878,7 @@ Token Lexer::lexNumericLiteral() {
     if (peek() == '.') {
         advance();
         populateChars();
-        floatChars.append('.');
+        floatChars.push_back('.');
 
         if (peek() == '_')
             addDiag(diag::DigitsLeadingUnderscore, currentOffset());
@@ -810,14 +892,14 @@ Token Lexer::lexNumericLiteral() {
                 break;
             else {
                 any = true;
-                floatChars.append(c);
+                floatChars.push_back(c);
                 advance();
             }
         }
 
         if (!any) {
             addDiag(diag::MissingFractionalDigits, currentOffset());
-            floatChars.append('0');
+            floatChars.push_back('0');
         }
     }
 
@@ -830,20 +912,20 @@ Token Lexer::lexNumericLiteral() {
     // If `FOO is defined to be 'h this represents an expression: 62 + 2
     // Otherwise, this represents a real literal: 300.0
 
-    optional<TimeUnit> timeSuffix;
+    std::optional<TimeUnit> timeSuffix;
     char c = peek();
     if (c == 'e' || c == 'E') {
         bool hasDecimal = !floatChars.empty();
         if (!hasDecimal)
             populateChars();
 
-        floatChars.append('e');
+        floatChars.push_back('e');
 
         // skip over leading sign
         int index = 1;
         c = peek(index);
         if (c == '+' || c == '-') {
-            floatChars.append(c);
+            floatChars.push_back(c);
             c = peek(++index);
         }
 
@@ -858,7 +940,7 @@ Token Lexer::lexNumericLiteral() {
                 break;
             else {
                 any = true;
-                floatChars.append(c);
+                floatChars.push_back(c);
                 c = peek(++index);
             }
         }
@@ -867,7 +949,7 @@ Token Lexer::lexNumericLiteral() {
             advance(index);
             if (!any) {
                 addDiag(diag::MissingExponentDigits, currentOffset());
-                floatChars.append('1');
+                floatChars.push_back('1');
             }
         }
         else {
@@ -888,7 +970,7 @@ Token Lexer::lexNumericLiteral() {
         // We have a floating point result. Let the standard library do the heavy lifting of
         // converting and rounding correctly. Note that we depend on this code returning
         // 0 for underflow and +inf for overflow.
-        floatChars.append('\0');
+        floatChars.push_back('\0');
 
         char* end;
         errno = 0;
@@ -907,8 +989,6 @@ Token Lexer::lexNumericLiteral() {
     // normal numeric literal
     SVInt intVal;
     if (!digits.empty()) {
-        static const double BitsPerDecimal = log2(10.0);
-
         double bitsDbl = ceil(BitsPerDecimal * double(digits.size()));
         bitwidth_t bits;
         if (bitsDbl <= double(SVInt::MAX_BITS))
@@ -967,7 +1047,7 @@ Token Lexer::lexApostrophe() {
     }
 }
 
-optional<TimeUnit> Lexer::lexTimeLiteral() {
+std::optional<TimeUnit> Lexer::lexTimeLiteral() {
 #define CASE(c, flag)              \
     case c:                        \
         if (peek(1) == 's') {      \
@@ -994,6 +1074,7 @@ optional<TimeUnit> Lexer::lexTimeLiteral() {
     return std::nullopt;
 }
 
+template<bool StopAfterNewline>
 void Lexer::lexTrivia() {
     while (true) {
         mark();
@@ -1025,10 +1106,14 @@ void Lexer::lexTrivia() {
                 advance();
                 consume('\n');
                 addTrivia(TriviaKind::EndOfLine);
+                if (StopAfterNewline)
+                    return;
                 break;
             case '\n':
                 advance();
                 addTrivia(TriviaKind::EndOfLine);
+                if (StopAfterNewline)
+                    return;
                 break;
             default:
                 return;
@@ -1065,53 +1150,259 @@ void Lexer::scanWhitespace() {
 }
 
 void Lexer::scanLineComment() {
+    bool sawUTF8Error = false;
     while (true) {
         char c = peek();
-        if (isNewline(c))
-            break;
-
-        if (c == '\0') {
-            if (reallyAtEnd())
+        if (isASCII(c)) {
+            if (isNewline(c))
                 break;
 
-            // otherwise just error and ignore
-            errorCount++;
-            addDiag(diag::EmbeddedNull, currentOffset());
+            sawUTF8Error = false;
+            if (c == '\0') {
+                if (reallyAtEnd())
+                    break;
+
+                // otherwise just error and ignore
+                errorCount++;
+                addDiag(diag::EmbeddedNull, currentOffset());
+            }
+            advance();
         }
-        advance();
+        else {
+            uint32_t unused;
+            sawUTF8Error |= !scanUTF8Char(sawUTF8Error, &unused);
+        }
     }
     addTrivia(TriviaKind::LineComment);
 }
 
 void Lexer::scanBlockComment() {
+    bool sawUTF8Error = false;
     while (true) {
         char c = peek();
-        if (c == '\0') {
-            if (reallyAtEnd()) {
-                addDiag(diag::UnterminatedBlockComment, currentOffset());
+        if (isASCII(c)) {
+            sawUTF8Error = false;
+            if (c == '*' && peek(1) == '/') {
+                advance(2);
                 break;
             }
+            else if (c == '/' && peek(1) == '*') {
+                // nested block comments disallowed by the standard; ignore and continue
+                addDiag(diag::NestedBlockComment, currentOffset());
+                advance(2);
+            }
+            else if (c == '\0') {
+                if (reallyAtEnd()) {
+                    addDiag(diag::UnterminatedBlockComment, currentOffset());
+                    break;
+                }
 
-            // otherwise just error and ignore
-            errorCount++;
-            addDiag(diag::EmbeddedNull, currentOffset());
-            advance();
-        }
-        else if (c == '*' && peek(1) == '/') {
-            advance(2);
-            break;
-        }
-        else if (c == '/' && peek(1) == '*') {
-            // nested block comments disallowed by the standard; ignore and continue
-            addDiag(diag::NestedBlockComment, currentOffset());
-            advance(2);
+                // otherwise just error and ignore
+                errorCount++;
+                addDiag(diag::EmbeddedNull, currentOffset());
+                advance();
+            }
+            else {
+                advance();
+            }
         }
         else {
-            advance();
+            uint32_t unused;
+            sawUTF8Error |= !scanUTF8Char(sawUTF8Error, &unused);
         }
     }
 
     addTrivia(TriviaKind::BlockComment);
+}
+
+bool Lexer::scanUTF8Char(bool alreadyErrored, uint32_t* code) {
+    int error;
+    auto curr = sourceBuffer;
+    if (sourceBuffer + 4 < sourceEnd) {
+        sourceBuffer = utf8Decode(sourceBuffer, code, &error);
+    }
+    else {
+        char buf[4] = {};
+        memcpy(buf, sourceBuffer, size_t(sourceEnd - sourceBuffer - 1));
+
+        auto next = utf8Decode(buf, code, &error);
+        sourceBuffer += next - buf;
+    }
+
+    if (error) {
+        errorCount++;
+        if (!alreadyErrored)
+            addDiag(diag::InvalidUTF8Seq, (size_t)(curr - originalBegin));
+        return false;
+    }
+
+    return true;
+}
+
+void Lexer::scanEncodedText(ProtectEncoding encoding, uint32_t expectedBytes, bool singleLine) {
+    // Helper function that returns true if the current position in the buffer
+    // is looking at the string "pragma".
+    auto lookingAtPragma = [&] {
+        int index = 0;
+        for (char c : "pragma"sv) {
+            if (peek(++index) != c)
+                return false;
+        }
+        return true;
+    };
+
+    auto invalidByte = [&](char invalidChar, string_view name) {
+        auto& diag = addDiag(diag::InvalidEncodingByte, currentOffset()) << name;
+        diag << (isPrintableASCII(invalidChar) ? std::string(1, invalidChar)
+                                               : fmt::format("{:#04x}", invalidChar));
+
+        // Try to skip ahead to the next `pragma directive to get us out of this region.
+        while (true) {
+            char c = peek();
+            if (c == '\0' && reallyAtEnd())
+                break;
+
+            if (c == '`' && lookingAtPragma())
+                break;
+
+            if (singleLine && (c == '\r' || c == '\n'))
+                break;
+
+            advance();
+        }
+    };
+
+    uint32_t byteCount = 0;
+    while (true) {
+        if (expectedBytes && byteCount >= expectedBytes && !singleLine) {
+            if (byteCount != expectedBytes) {
+                addDiag(diag::ProtectEncodingBytes, currentOffset() - 1)
+                    << byteCount << expectedBytes;
+            }
+            return;
+        }
+
+        char c = peek();
+        if (c == '\r' || c == '\n') {
+            // If this is a single line region then we're done here.
+            if (singleLine) {
+                if (expectedBytes && byteCount != expectedBytes) {
+                    addDiag(diag::ProtectEncodingBytes, currentOffset() - 1)
+                        << byteCount << expectedBytes;
+                }
+                return;
+            }
+
+            // Otherwise continue on. This newline doesn't count toward our expected byte limit,
+            // unless this is the quoted printable encoding.
+            advance();
+            if (c == '\r' && peek() == '\n')
+                advance();
+
+            if (encoding == ProtectEncoding::QuotedPrintable) {
+                byteCount++;
+                if (c == '\r' && peek(-1) == '\n')
+                    byteCount++;
+            }
+
+            continue;
+        }
+
+        if (!expectedBytes && !singleLine && c == '`') {
+            // Encoding tools probably shouldn't do this but if they do we
+            // should try to gracefully guess the end of the region by looking
+            // for another non-encoded pragma that ends it.
+            if (lookingAtPragma())
+                return;
+        }
+
+        switch (encoding) {
+            case ProtectEncoding::UUEncode: {
+                // uuencode tells us the length of the line up front, so use that
+                // to read the whole line in one go. The encoding is invalid if that
+                // doesn't match up with what we find in the data.
+                if (c == '`') {
+                    // The grave character is a special case meaning 0 characters on this line.
+                    advance();
+                    continue;
+                }
+
+                if (c < 0x20 || c > 0x20 + 45) {
+                    invalidByte(c, "uuencode"sv);
+                    return;
+                }
+
+                uint32_t count = uint32_t(c - 0x20);
+                byteCount += count;
+                advance();
+
+                uint32_t encodedCount = (uint32_t)ceil(count * 4 / 3.0);
+                for (uint32_t i = 0; i < encodedCount; i++) {
+                    c = peek();
+                    if (c < 0x20 || c > 0x60) {
+                        invalidByte(c, "uuencode"sv);
+                        return;
+                    }
+                    advance();
+                }
+                break;
+            }
+            case ProtectEncoding::Base64:
+                byteCount += 3;
+                for (int i = 0; i < 4; i++) {
+                    c = peek();
+                    if (i > 1 && c == '=') {
+                        byteCount--;
+                    }
+                    else if (!isBase64Char(c)) {
+                        invalidByte(c, "base64"sv);
+                        return;
+                    }
+
+                    advance();
+                }
+                break;
+            case ProtectEncoding::QuotedPrintable:
+                if (!isPrintableASCII(c) && c != '\t') {
+                    invalidByte(c, "quoted-printable"sv);
+                    return;
+                }
+
+                advance();
+                if (c == '=') {
+                    // If this is a soft line break then it doesn't count
+                    // towards our byte count. Otherwise this is an escaped
+                    // character that does count.
+                    c = peek();
+                    if (c == '\r' || c == '\n') {
+                        advance();
+                        if (c == '\r' && peek() == '\n')
+                            advance();
+                        continue;
+                    }
+
+                    if (!isHexDigit(c) || !isHexDigit(peek(1))) {
+                        invalidByte(c, "quoted-printable"sv);
+                        return;
+                    }
+
+                    advance(2);
+                }
+                byteCount++;
+                break;
+            case ProtectEncoding::Raw:
+                if (c == '\0' && reallyAtEnd()) {
+                    addDiag(diag::RawProtectEOF, currentOffset() - 1);
+                    return;
+                }
+
+                advance();
+                byteCount++;
+                break;
+            default:
+                ASSUME_UNREACHABLE;
+        }
+    }
 }
 
 template<typename... Args>
@@ -1122,15 +1413,15 @@ Token Lexer::create(TokenKind kind, Args&&... args) {
 }
 
 void Lexer::addTrivia(TriviaKind kind) {
-    triviaBuffer.emplace(kind, lexeme());
+    triviaBuffer.emplace_back(kind, lexeme());
 }
 
 Diagnostic& Lexer::addDiag(DiagCode code, size_t offset) {
     return diagnostics.add(code, SourceLocation(bufferId, offset));
 }
 
-size_t Lexer::currentOffset() {
+size_t Lexer::currentOffset() const {
     return (size_t)(sourceBuffer - originalBegin);
 }
 
-} // namespace slang
+} // namespace slang::parsing

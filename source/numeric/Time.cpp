@@ -2,11 +2,12 @@
 // Time.cpp
 // Contains various time-related utilities and functions
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/numeric/Time.h"
 
-#include <fmt/format.h>
+#include <fmt/core.h>
 #include <ostream>
 
 #include "slang/util/String.h"
@@ -15,10 +16,8 @@
 namespace slang {
 
 const static StringTable<TimeUnit> strToUnit = {
-    { "s", TimeUnit::Seconds },       { "ms", TimeUnit::Milliseconds },
-    { "us", TimeUnit::Microseconds }, { "ns", TimeUnit::Nanoseconds },
-    { "ps", TimeUnit::Picoseconds },  { "fs", TimeUnit::Femtoseconds }
-};
+    {"s", TimeUnit::Seconds},      {"ms", TimeUnit::Milliseconds}, {"us", TimeUnit::Microseconds},
+    {"ns", TimeUnit::Nanoseconds}, {"ps", TimeUnit::Picoseconds},  {"fs", TimeUnit::Femtoseconds}};
 
 bool suffixToTimeUnit(string_view timeSuffix, TimeUnit& unit) {
     return strToUnit.lookup(timeSuffix, unit);
@@ -39,12 +38,12 @@ string_view timeUnitToSuffix(TimeUnit unit) {
         case TimeUnit::Femtoseconds:
             return "fs";
     }
-    THROW_UNREACHABLE;
+    ASSUME_UNREACHABLE;
 }
 
 TimeScaleValue::TimeScaleValue(string_view str) {
     size_t idx;
-    optional<int> i = strToInt(str, &idx);
+    auto i = strToInt(str, &idx);
     if (!i)
         throw std::invalid_argument("Not a valid timescale magnitude");
 
@@ -62,7 +61,7 @@ TimeScaleValue::TimeScaleValue(string_view str) {
     *this = *tv;
 }
 
-optional<TimeScaleValue> TimeScaleValue::fromLiteral(double value, TimeUnit unit) {
+std::optional<TimeScaleValue> TimeScaleValue::fromLiteral(double value, TimeUnit unit) {
     if (value == 1)
         return TimeScaleValue(unit, TimeScaleMagnitude::One);
     if (value == 10)
@@ -99,8 +98,8 @@ std::ostream& operator<<(std::ostream& os, const TimeScaleValue& tv) {
 double TimeScale::apply(double value, TimeUnit unit) const {
     // First scale the value by the difference between our base and the provided unit.
     // TimeUnits are from 0-5, so we need 11 entries.
-    static constexpr double scales[] = { 1e15, 1e12, 1e9,  1e6,   1e3,  1e0,
-                                         1e-3, 1e-6, 1e-9, 1e-12, 1e-15 };
+    static constexpr double scales[] = {1e15, 1e12, 1e9,  1e6,   1e3,  1e0,
+                                        1e-3, 1e-6, 1e-9, 1e-12, 1e-15};
     int diff = int(unit) - int(base.unit);
     double scale = scales[diff + int(TimeUnit::Femtoseconds)] / int(base.magnitude);
     value *= scale;

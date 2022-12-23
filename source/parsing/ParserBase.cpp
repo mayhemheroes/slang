@@ -2,7 +2,8 @@
 // ParserBase.cpp
 // Base class for parsing
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/parsing/ParserBase.h"
 
@@ -10,7 +11,9 @@
 #include "slang/parsing/Preprocessor.h"
 #include "slang/util/BumpAllocator.h"
 
-namespace slang {
+namespace slang::parsing {
+
+using namespace syntax;
 
 using SF = SyntaxFacts;
 
@@ -19,9 +22,9 @@ ParserBase::ParserBase(Preprocessor& preprocessor) :
 }
 
 void ParserBase::prependSkippedTokens(Token& token) {
-    SmallVectorSized<Trivia, 8> buffer;
-    buffer.append(Trivia{ TriviaKind::SkippedTokens, skippedTokens.copy(alloc) });
-    buffer.appendRange(token.trivia());
+    SmallVector<Trivia, 8> buffer;
+    buffer.push_back(Trivia{TriviaKind::SkippedTokens, skippedTokens.copy(alloc)});
+    buffer.append(token.trivia());
 
     token = token.withTrivia(alloc, buffer.copy(alloc));
     skippedTokens.clear();
@@ -74,9 +77,9 @@ Token ParserBase::consume() {
         prependSkippedTokens(result);
 
     if (SF::isOpenDelimOrKeyword(result.kind))
-        openDelims.append(result);
+        openDelims.push_back(result);
     else if (SF::isCloseDelimOrKeyword(result.kind) && !openDelims.empty())
-        openDelims.pop();
+        openDelims.pop_back();
 
     return result;
 }
@@ -98,7 +101,7 @@ Token ParserBase::expect(TokenKind kind) {
     if (SF::isCloseDelimOrKeyword(kind) && !openDelims.empty()) {
         if (SF::isMatchingDelims(openDelims.back().kind, kind)) {
             matchingDelim = openDelims.back();
-            openDelims.pop();
+            openDelims.pop_back();
         }
         else {
             // If we hit this point assume that our stack of delims has
@@ -117,7 +120,7 @@ void ParserBase::skipToken(std::optional<DiagCode> diagCode) {
     ASSERT(token.kind != TokenKind::EndOfFile);
 
     bool haveDiag = haveDiagAtCurrentLoc();
-    skippedTokens.append(token);
+    skippedTokens.push_back(token);
     window.moveToNext();
 
     if (diagCode && !haveDiag)
@@ -130,7 +133,7 @@ void ParserBase::skipToken(std::optional<DiagCode> diagCode) {
     if (skipKind == TokenKind::Unknown)
         return;
 
-    SmallVectorSized<TokenKind, 16> delimStack;
+    SmallVector<TokenKind> delimStack;
     while (true) {
         token = peek();
         if (token.kind == TokenKind::EndOfFile)
@@ -145,11 +148,11 @@ void ParserBase::skipToken(std::optional<DiagCode> diagCode) {
                     return;
 
                 skipKind = delimStack.back();
-                delimStack.pop();
+                delimStack.pop_back();
             }
         }
 
-        skippedTokens.append(token);
+        skippedTokens.push_back(token);
         window.moveToNext();
 
         if (token.kind == skipKind) {
@@ -157,12 +160,12 @@ void ParserBase::skipToken(std::optional<DiagCode> diagCode) {
                 return;
 
             skipKind = delimStack.back();
-            delimStack.pop();
+            delimStack.pop_back();
         }
         else {
             TokenKind newSkipKind = SF::getSkipToKind(token.kind);
             if (newSkipKind != TokenKind::Unknown) {
-                delimStack.append(skipKind);
+                delimStack.push_back(skipKind);
                 skipKind = newSkipKind;
             }
         }
@@ -260,4 +263,4 @@ void ParserBase::Window::insertHead(span<const Token> tokens) {
     count = tokens.size() + existing;
 }
 
-} // namespace slang
+} // namespace slang::parsing

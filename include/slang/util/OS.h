@@ -2,21 +2,32 @@
 //! @file OS.h
 //! @brief Operating system-specific utilities
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
 #include <filesystem>
-#include <fmt/color.h>
 #include <vector>
 
+#include "slang/util/ScopeGuard.h"
 #include "slang/util/String.h"
+
+namespace fmt {
+inline namespace v9 {
+class text_style;
+}
+} // namespace fmt
 
 namespace slang {
 
 /// A collection of various OS-specific utility functions.
-class OS {
+class SLANG_EXPORT OS {
 public:
+    /// Tries to enable color output support for stdout and stderr.
+    /// @return true if successful and false otherwise.
+    static bool tryEnableColors();
+
     /// @return true if the given file descriptor supports color text output.
     static bool fileSupportsColors(int fd);
 
@@ -33,45 +44,37 @@ public:
     /// Note that the buffer will be null-terminated.
     static bool readFile(const std::filesystem::path& path, std::vector<char>& buffer);
 
-    /// Prints formatted text to stdout, handling Unicode conversions where necessary.
-    template<typename... Args>
-    static void print(string_view format, const Args&... args) {
-        fmt::vprint(stdout, format, fmt::make_format_args(args...));
+    /// Prints text to stdout.
+    static void print(string_view text);
+
+    /// Prints colored formatted text to stdout.
+    static void print(const fmt::text_style& style, string_view text);
+
+    /// Prints formatted text to stderr.
+    static void printE(string_view text);
+
+    /// Prints colored formatted text to stderr.
+    static void printE(const fmt::text_style& style, string_view text);
+
+    static std::string getEnv(const std::string& name);
+
+    static auto captureOutput() {
+        capturedStdout.clear();
+        capturedStderr.clear();
+
+        capturingOutput = true;
+        return ScopeGuard([] { capturingOutput = false; });
     }
 
-    /// Prints colored formatted text to stdout, handling Unicode conversions where necessary.
-    template<typename... Args>
-    static void print(const fmt::text_style& style, string_view format, const Args&... args) {
-        if (showColorsStdout) {
-            fmt::vprint(stdout, style, format, fmt::make_format_args(args...));
-        }
-        else {
-            fmt::vprint(stdout, format, fmt::make_format_args(args...));
-        }
-    }
-
-    /// Prints formatted text to stderr, handling Unicode conversions where necessary.
-    template<typename... Args>
-    static void printE(string_view format, const Args&... args) {
-        fmt::vprint(stderr, format, fmt::make_format_args(args...));
-    }
-
-    /// Prints colored formatted text to stderr, handling Unicode conversions where necessary.
-    template<typename... Args>
-    static void printE(const fmt::text_style& style, string_view format, const Args&... args) {
-        if (showColorsStderr) {
-            fmt::vprint(stderr, style, format, fmt::make_format_args(args...));
-        }
-        else {
-            fmt::vprint(stderr, format, fmt::make_format_args(args...));
-        }
-    }
+    static inline std::string capturedStdout;
+    static inline std::string capturedStderr;
 
 private:
     OS() = default;
 
     static inline bool showColorsStdout = false;
     static inline bool showColorsStderr = false;
+    static inline bool capturingOutput = false;
 };
 
 } // namespace slang

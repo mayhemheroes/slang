@@ -2,13 +2,14 @@
 // SyntaxFacts.cpp
 // Various syntax-related utility methods
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/syntax/SyntaxFacts.h"
 
 #include "slang/syntax/AllSyntax.h"
 
-namespace slang {
+namespace slang::syntax {
 
 string_view SyntaxFacts::getSimpleTypeName(const DataTypeSyntax& syntax) {
     if (syntax.kind == SyntaxKind::NamedType) {
@@ -490,7 +491,7 @@ SyntaxKind SyntaxFacts::getModuleDeclarationKind(TokenKind kind) {
     }
 }
 
-TokenKind SyntaxFacts::getModuleEndKind(TokenKind kind) {
+parsing::TokenKind SyntaxFacts::getModuleEndKind(TokenKind kind) {
     switch (kind) {
         case TokenKind::ModuleKeyword: return TokenKind::EndModuleKeyword;
         case TokenKind::MacromoduleKeyword: return TokenKind::EndModuleKeyword;
@@ -501,7 +502,7 @@ TokenKind SyntaxFacts::getModuleEndKind(TokenKind kind) {
     }
 }
 
-TokenKind SyntaxFacts::getDelimCloseKind(TokenKind kind) {
+parsing::TokenKind SyntaxFacts::getDelimCloseKind(TokenKind kind) {
     switch (kind) {
         case TokenKind::OpenParenthesis: return TokenKind::CloseParenthesis;
         case TokenKind::OpenBrace: return TokenKind::CloseBrace;
@@ -512,7 +513,7 @@ TokenKind SyntaxFacts::getDelimCloseKind(TokenKind kind) {
     }
 }
 
-TokenKind SyntaxFacts::getSkipToKind(TokenKind kind) {
+parsing::TokenKind SyntaxFacts::getSkipToKind(TokenKind kind) {
     switch (kind) {
         case TokenKind::OpenParenthesis: return TokenKind::CloseParenthesis;
         case TokenKind::OpenBrace: return TokenKind::CloseBrace;
@@ -1370,11 +1371,25 @@ bool SyntaxFacts::isAllowedInProgram(SyntaxKind kind) {
     }
 }
 
+bool SyntaxFacts::isAllowedInAnonymousProgram(SyntaxKind kind) {
+    switch (kind) {
+        case SyntaxKind::TaskDeclaration:
+        case SyntaxKind::FunctionDeclaration:
+        case SyntaxKind::ClassDeclaration:
+        case SyntaxKind::CovergroupDeclaration:
+        case SyntaxKind::EmptyMember:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool SyntaxFacts::isAllowedInPackage(SyntaxKind kind) {
     switch (kind) {
         case SyntaxKind::TimeUnitsDeclaration:
         case SyntaxKind::PackageExportDeclaration:
         case SyntaxKind::PackageExportAllDeclaration:
+        case SyntaxKind::AnonymousProgram:
             return true;
         default:
             return isModuleOrPackageDecl(kind);
@@ -1462,6 +1477,28 @@ bool SyntaxFacts::isStrength1(TokenKind kind) {
     }
 }
 
+bool SyntaxFacts::isAssignmentOperator(SyntaxKind kind) {
+    switch (kind) {
+        case SyntaxKind::AssignmentExpression:
+        case SyntaxKind::AddAssignmentExpression:
+        case SyntaxKind::SubtractAssignmentExpression:
+        case SyntaxKind::MultiplyAssignmentExpression:
+        case SyntaxKind::DivideAssignmentExpression:
+        case SyntaxKind::ModAssignmentExpression:
+        case SyntaxKind::AndAssignmentExpression:
+        case SyntaxKind::OrAssignmentExpression:
+        case SyntaxKind::XorAssignmentExpression:
+        case SyntaxKind::LogicalLeftShiftAssignmentExpression:
+        case SyntaxKind::LogicalRightShiftAssignmentExpression:
+        case SyntaxKind::ArithmeticLeftShiftAssignmentExpression:
+        case SyntaxKind::ArithmeticRightShiftAssignmentExpression:
+        case SyntaxKind::NonblockingAssignmentExpression:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // clang-format on
 
-} // namespace slang
+} // namespace slang::syntax

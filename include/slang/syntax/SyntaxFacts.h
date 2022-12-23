@@ -2,23 +2,31 @@
 //! @file SyntaxFacts.h
 //! @brief Various syntax-related utility methods
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
 #include "slang/util/Util.h"
 
-namespace slang {
+namespace slang::parsing {
+
+enum class TokenKind : uint16_t;
+
+}
+
+namespace slang::syntax {
 
 enum class SyntaxKind;
-enum class TokenKind : uint16_t;
 
 struct DataTypeSyntax;
 
 /// A collection of static methods that query various facts related
 /// to tokens and syntax nodes.
-class SyntaxFacts {
+class SLANG_EXPORT SyntaxFacts {
 public:
+    using TokenKind = parsing::TokenKind;
+
     /// @return the kind of syntax that should be created for the given
     /// unary prefix operator token.
     static SyntaxKind getUnaryPrefixExpression(TokenKind kind);
@@ -297,6 +305,9 @@ public:
     /// @return true if the given syntax node is allowed within a program definition.
     static bool isAllowedInProgram(SyntaxKind kind);
 
+    /// @return true if the given syntax node is allowed within an anonymous program definition.
+    static bool isAllowedInAnonymousProgram(SyntaxKind kind);
+
     /// @return true if the given syntax node is allowed within a package definition.
     static bool isAllowedInPackage(SyntaxKind kind);
 
@@ -312,6 +323,9 @@ public:
     /// @return true if the given token kind is a drive strength for value '1'.
     static bool isStrength1(TokenKind kind);
 
+    /// @return true if the given syntax kind is an assignment operator.
+    static bool isAssignmentOperator(SyntaxKind kind);
+
     /// @return a string representing the name of the given data type, if it has a simple name.
     static string_view getSimpleTypeName(const DataTypeSyntax& syntax);
 
@@ -319,4 +333,4 @@ protected:
     SyntaxFacts() = default;
 };
 
-} // namespace slang
+} // namespace slang::syntax

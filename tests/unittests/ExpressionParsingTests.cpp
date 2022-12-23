@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
 #include "slang/parsing/Parser.h"
@@ -804,4 +807,105 @@ endmodule
     auto result = SyntaxPrinter().setSquashNewlines(false).print(syntax).str();
     CHECK(result == text);
     CHECK_DIAGNOSTICS_EMPTY;
+}
+
+TEST_CASE("Invalid integer literal base regression") {
+    auto& text = R"(
+module m;
+    int i = #'d3;
+endmodule
+)";
+    auto& syntax = parseCompilationUnit(text);
+    auto result = SyntaxPrinter().setSquashNewlines(false).print(syntax).str();
+    CHECK(result == text);
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::ExpectedIntegerLiteral);
+}
+
+TEST_CASE("Event control parsing regress GH #630") {
+    auto& text = R"(
+module t;
+event e;
+wire w;
+
+// Named event, no parentheses, no delay, works
+always @e
+ begin
+ end
+
+// Named event, parentheses, delay, works
+always @(e)
+ #1
+ begin
+ end
+
+// named event, no parenthesis, delay, doesn't work
+always @e
+ #1
+ begin
+ end
+
+// wire, no parenthesis, delay, doesn't work
+always @w
+ #1
+ begin
+ end
+
+endmodule
+)";
+    parseCompilationUnit(text);
+    CHECK_DIAGNOSTICS_EMPTY;
+}
+
+TEST_CASE("Parsing select of a literal error") {
+    auto tree = SyntaxTree::fromText(R"(
+class C;
+    rand int unsigned a;
+    constraint test_c {
+        a dist {
+            1      :/ 9
+            [2:10] :/ 1
+        };
+    }
+endclass
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& msg = compilation.getAllDiagnostics();
+    std::string result = "\n" + report(msg);
+    CHECK(result == R"(
+source:6:24: error: expected ','
+            1      :/ 9
+                       ^
+)");
+}
+
+TEST_CASE("Event control parsing @( *)") {
+    auto& text = R"(
+module t(a,b,ou);
+	input a,b;
+	output ou;
+	reg a,b,ou;
+	always @( *) begin
+        ou <= a ^ b;
+	end
+endmodule
+)";
+    parseCompilationUnit(text);
+    CHECK_DIAGNOSTICS_EMPTY;
+}
+
+TEST_CASE("Attributes disallowed on assignment operators") {
+    auto& text = R"(
+module m (input a, b, output c);
+    assign c = (* foo *) a + (* foo *) b;
+endmodule
+)";
+    parseCompilationUnit(text);
+
+    REQUIRE(diagnostics.size() == 1);
+    CHECK(diagnostics[0].code == diag::AttributesNotAllowed);
 }

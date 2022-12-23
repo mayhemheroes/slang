@@ -2,7 +2,8 @@
 // DiagnosticClient.cpp
 // Client interface for diagnostic rendering
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/diagnostics/DiagnosticClient.h"
 
@@ -18,14 +19,15 @@ void DiagnosticClient::setEngine(const DiagnosticEngine& newEngine) {
     sourceManager = &engine->getSourceManager();
 }
 
-void DiagnosticClient::getIncludeStack(BufferID buffer, SmallVector<SourceLocation>& stack) const {
+void DiagnosticClient::getIncludeStack(BufferID buffer,
+                                       SmallVectorBase<SourceLocation>& stack) const {
     stack.clear();
     while (buffer) {
         SourceLocation loc = sourceManager->getIncludedFrom(buffer);
         if (!loc.buffer())
             break;
 
-        stack.append(loc);
+        stack.push_back(loc);
         buffer = loc.buffer();
     }
 }
@@ -56,7 +58,7 @@ string_view DiagnosticClient::getSeverityString(DiagnosticSeverity severity) {
         case DiagnosticSeverity::Fatal:
             return "fatal error";
         default:
-            THROW_UNREACHABLE;
+            ASSUME_UNREACHABLE;
     }
 }
 

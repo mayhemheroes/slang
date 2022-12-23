@@ -2,14 +2,17 @@
 // Parser_expressions.cpp
 // Expression-related parsing methods
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/diagnostics/ParserDiags.h"
 #include "slang/parsing/Lexer.h"
 #include "slang/parsing/Parser.h"
 #include "slang/parsing/Preprocessor.h"
 
-namespace slang {
+namespace slang::parsing {
+
+using namespace syntax;
 
 ExpressionSyntax& Parser::parseExpression() {
     return parseSubExpression(ExpressionOptions::None, 0);
@@ -149,6 +152,9 @@ ExpressionSyntax& Parser::parseBinaryExpression(ExpressionSyntax* left,
             auto attributes = parseAttributes();
             auto& rightOperand = parseSubExpression(options, newPrecedence);
             left = &factory.binaryExpression(opKind, *left, opToken, attributes, rightOperand);
+
+            if (!attributes.empty() && isAssignmentOperator(opKind))
+                errorIfAttributes(attributes);
         }
     }
 
@@ -286,8 +292,8 @@ ExpressionSyntax& Parser::parsePrimaryExpression(bitmask<ExpressionOptions> opti
 }
 
 ExpressionSyntax& Parser::parseIntegerExpression(bool disallowVector) {
-    auto result =
-        disallowVector ? numberParser.parseSimpleInt(*this) : numberParser.parseInteger(*this);
+    auto result = disallowVector ? numberParser.parseSimpleInt(*this)
+                                 : numberParser.parseInteger(*this);
 
     if (result.isSimple)
         return factory.literalExpression(SyntaxKind::IntegerLiteralExpression, result.value);
@@ -296,7 +302,7 @@ ExpressionSyntax& Parser::parseIntegerExpression(bool disallowVector) {
 }
 
 void Parser::handleExponentSplit(Token token, size_t offset) {
-    SmallVectorSized<Token, 4> split;
+    SmallVector<Token, 4> split;
     Lexer::splitTokens(alloc, getDiagnostics(), getPP().getSourceManager(), token, offset,
                        getPP().getCurrentKeywordVersion(), split);
 
@@ -336,15 +342,15 @@ ExpressionSyntax& Parser::parseOpenRangeElement(bitmask<ExpressionOptions> optio
 
 ConcatenationExpressionSyntax& Parser::parseConcatenation(Token openBrace,
                                                           ExpressionSyntax* first) {
-    SmallVectorSized<TokenOrSyntax, 8> buffer;
+    SmallVector<TokenOrSyntax, 8> buffer;
     if (first) {
         // it's possible to have just one element in the concatenation list, so check for a close
         // brace
-        buffer.append(first);
+        buffer.push_back(first);
         if (peek(TokenKind::CloseBrace))
             return factory.concatenationExpression(openBrace, buffer.copy(alloc), consume());
 
-        buffer.append(expect(TokenKind::Comma));
+        buffer.push_back(expect(TokenKind::Comma));
     }
 
     Token closeBrace;
@@ -398,8 +404,8 @@ AssignmentPatternExpressionSyntax& Parser::parseAssignmentPatternExpression(Data
         // This is an empty pattern -- we'll just warn and continue on.
         addDiag(diag::EmptyAssignmentPattern, openBrace.location());
 
-        auto pattern =
-            &factory.simpleAssignmentPattern(openBrace, span<TokenOrSyntax>{}, consume());
+        auto pattern = &factory.simpleAssignmentPattern(openBrace, span<TokenOrSyntax>{},
+                                                        consume());
         return factory.assignmentPatternExpression(type, *pattern);
     }
     else {
@@ -408,13 +414,13 @@ AssignmentPatternExpressionSyntax& Parser::parseAssignmentPatternExpression(Data
 
     Token closeBrace;
     AssignmentPatternSyntax* pattern;
-    SmallVectorSized<TokenOrSyntax, 8> buffer;
+    SmallVector<TokenOrSyntax, 8> buffer;
 
     switch (peek().kind) {
         case TokenKind::Colon:
-            buffer.append(&parseAssignmentPatternItem(firstExpr));
+            buffer.push_back(&parseAssignmentPatternItem(firstExpr));
             if (peek(TokenKind::Comma)) {
-                buffer.append(consume());
+                buffer.push_back(consume());
 
                 parseList<isPossibleExpressionOrCommaOrDefault, isEndOfBracedList>(
                     buffer, TokenKind::CloseBrace, TokenKind::Comma, closeBrace,
@@ -425,8 +431,8 @@ AssignmentPatternExpressionSyntax& Parser::parseAssignmentPatternExpression(Data
                 closeBrace = expect(TokenKind::CloseBrace);
             }
 
-            pattern =
-                &factory.structuredAssignmentPattern(openBrace, buffer.copy(alloc), closeBrace);
+            pattern = &factory.structuredAssignmentPattern(openBrace, buffer.copy(alloc),
+                                                           closeBrace);
             break;
         case TokenKind::OpenBrace: {
             auto innerOpenBrace = consume();
@@ -440,8 +446,8 @@ AssignmentPatternExpressionSyntax& Parser::parseAssignmentPatternExpression(Data
             break;
         }
         case TokenKind::Comma:
-            buffer.append(firstExpr);
-            buffer.append(consume());
+            buffer.push_back(firstExpr);
+            buffer.push_back(consume());
 
             parseList<isPossibleExpressionOrComma, isEndOfBracedList>(
                 buffer, TokenKind::CloseBrace, TokenKind::Comma, closeBrace, RequireItems::True,
@@ -449,14 +455,14 @@ AssignmentPatternExpressionSyntax& Parser::parseAssignmentPatternExpression(Data
             pattern = &factory.simpleAssignmentPattern(openBrace, buffer.copy(alloc), closeBrace);
             break;
         case TokenKind::CloseBrace:
-            buffer.append(firstExpr);
+            buffer.push_back(firstExpr);
             closeBrace = consume();
             pattern = &factory.simpleAssignmentPattern(openBrace, buffer.copy(alloc), closeBrace);
             break;
         default:
             // This is an error case; let the list handling code get us out of it.
-            buffer.append(firstExpr);
-            buffer.append(expect(TokenKind::Comma));
+            buffer.push_back(firstExpr);
+            buffer.push_back(expect(TokenKind::Comma));
 
             parseList<isPossibleExpressionOrComma, isEndOfBracedList>(
                 buffer, TokenKind::CloseBrace, TokenKind::Comma, closeBrace, RequireItems::False,
@@ -529,11 +535,30 @@ bool Parser::isSequenceRepetition() {
 ExpressionSyntax& Parser::parsePostfixExpression(ExpressionSyntax& lhs,
                                                  bitmask<ExpressionOptions> options) {
     ExpressionSyntax* expr = &lhs;
+
+    auto isLiteral = [&] {
+        switch (expr->kind) {
+            case SyntaxKind::NullLiteralExpression:
+            case SyntaxKind::WildcardLiteralExpression:
+            case SyntaxKind::StringLiteralExpression:
+            case SyntaxKind::RealLiteralExpression:
+            case SyntaxKind::TimeLiteralExpression:
+            case SyntaxKind::IntegerLiteralExpression:
+            case SyntaxKind::UnbasedUnsizedLiteralExpression:
+            case SyntaxKind::IntegerVectorExpression:
+                return true;
+            default:
+                return false;
+        }
+    };
+
     while (true) {
         switch (peek().kind) {
             case TokenKind::OpenBracket:
-                if (options.has(ExpressionOptions::SequenceExpr) && isSequenceRepetition())
+                if (isLiteral() ||
+                    (options.has(ExpressionOptions::SequenceExpr) && isSequenceRepetition())) {
                     return *expr;
+                }
 
                 expr = &factory.elementSelectExpression(*expr, parseElementSelect());
                 break;
@@ -544,6 +569,9 @@ ExpressionSyntax& Parser::parsePostfixExpression(ExpressionSyntax& lhs,
                 break;
             }
             case TokenKind::OpenParenthesis: {
+                if (isLiteral())
+                    return *expr;
+
                 auto& args = parseArgumentList();
                 expr = &factory.invocationExpression(*expr, nullptr, &args);
                 break;
@@ -574,8 +602,8 @@ ExpressionSyntax& Parser::parsePostfixExpression(ExpressionSyntax& lhs,
                                                               *expr, attributes, op);
                     }
                     case TokenKind::OpenParenthesis:
-                        expr =
-                            &factory.invocationExpression(*expr, attributes, &parseArgumentList());
+                        expr = &factory.invocationExpression(*expr, attributes,
+                                                             &parseArgumentList());
                         break;
                     default:
                         // otherwise, this has to be a function call without any arguments
@@ -735,6 +763,9 @@ NameSyntax& Parser::parseNamePart(bitmask<NameOptions> options) {
 
     switch (peek().kind) {
         case TokenKind::Hash: {
+            if (options.has(NameOptions::NoClassScope))
+                return factory.identifierName(identifier);
+
             auto parameterValues = parseParameterValueAssignment();
             ASSERT(parameterValues);
             return factory.className(identifier, *parameterValues);
@@ -745,7 +776,7 @@ NameSyntax& Parser::parseNamePart(bitmask<NameOptions> options) {
                 // brackets need to be parsed specially because they declare
                 // loop variable names. All the selectors prior can be
                 // parsed as normal selectors.
-                SmallVectorSized<ElementSelectSyntax*, 4> buffer;
+                SmallVector<ElementSelectSyntax*> buffer;
                 do {
                     uint32_t index = 1;
                     scanTypePart<isSemicolon>(index, TokenKind::OpenBracket,
@@ -755,7 +786,7 @@ NameSyntax& Parser::parseNamePart(bitmask<NameOptions> options) {
                         break;
                     }
 
-                    buffer.append(&parseElementSelect());
+                    buffer.push_back(&parseElementSelect());
                 } while (peek(TokenKind::OpenBracket));
 
                 if (buffer.empty())
@@ -764,7 +795,7 @@ NameSyntax& Parser::parseNamePart(bitmask<NameOptions> options) {
                 return factory.identifierSelectName(identifier, buffer.copy(alloc));
             }
             else {
-                SmallVectorSized<ElementSelectSyntax*, 4> buffer;
+                SmallVector<ElementSelectSyntax*> buffer;
                 do {
                     // Inside a sequence expression this could be a repetition directive
                     // instead of a selection.
@@ -775,7 +806,7 @@ NameSyntax& Parser::parseNamePart(bitmask<NameOptions> options) {
                             return factory.identifierSelectName(identifier, buffer.copy(alloc));
                     }
 
-                    buffer.append(&parseElementSelect());
+                    buffer.push_back(&parseElementSelect());
                 } while (peek(TokenKind::OpenBracket));
 
                 return factory.identifierSelectName(identifier, buffer.copy(alloc));
@@ -810,9 +841,9 @@ ParamAssignmentSyntax& Parser::parseParamValue() {
         auto dot = consume();
         auto name = expect(TokenKind::Identifier);
 
-        auto [innerOpenParen, innerCloseParen, expr] =
-            parseGroupOrSkip(TokenKind::OpenParenthesis, TokenKind::CloseParenthesis,
-                             [this]() { return &parseMinTypMaxExpression(); });
+        auto [innerOpenParen, innerCloseParen,
+              expr] = parseGroupOrSkip(TokenKind::OpenParenthesis, TokenKind::CloseParenthesis,
+                                       [this]() { return &parseMinTypMaxExpression(); });
 
         return factory.namedParamAssignment(dot, name, innerOpenParen, expr, innerCloseParen);
     }
@@ -843,9 +874,9 @@ ArgumentSyntax& Parser::parseArgument() {
         auto dot = consume();
         auto name = expect(TokenKind::Identifier);
 
-        auto [innerOpenParen, innerCloseParen, expr] =
-            parseGroupOrSkip(TokenKind::OpenParenthesis, TokenKind::CloseParenthesis,
-                             [this]() { return &parsePropertyExpr(0); });
+        auto [innerOpenParen, innerCloseParen,
+              expr] = parseGroupOrSkip(TokenKind::OpenParenthesis, TokenKind::CloseParenthesis,
+                                       [this]() { return &parsePropertyExpr(0); });
 
         return factory.namedArgument(dot, name, innerOpenParen, expr, innerCloseParen);
     }
@@ -880,7 +911,7 @@ PatternSyntax& Parser::parsePattern() {
         case TokenKind::ApostropheOpenBrace: {
             auto openBrace = consume();
             Token closeBrace;
-            SmallVectorSized<TokenOrSyntax, 4> buffer;
+            SmallVector<TokenOrSyntax, 4> buffer;
 
             if (peek(TokenKind::Identifier) && peek(1).kind == TokenKind::Colon) {
                 parseList<isIdentifierOrComma, isCloseBrace>(
@@ -915,7 +946,7 @@ StructurePatternMemberSyntax& Parser::parseMemberPattern() {
 
 ConditionalPredicateSyntax& Parser::parseConditionalPredicate(ExpressionSyntax& first,
                                                               TokenKind endKind, Token& end) {
-    SmallVectorSized<TokenOrSyntax, 4> buffer;
+    SmallVector<TokenOrSyntax, 4> buffer;
 
     MatchesClauseSyntax* matchesClause = nullptr;
     if (peek(TokenKind::MatchesKeyword)) {
@@ -923,10 +954,10 @@ ConditionalPredicateSyntax& Parser::parseConditionalPredicate(ExpressionSyntax& 
         matchesClause = &factory.matchesClause(matches, parsePattern());
     }
 
-    buffer.append(&factory.conditionalPattern(first, matchesClause));
+    buffer.push_back(&factory.conditionalPattern(first, matchesClause));
 
     if (peek(TokenKind::TripleAnd)) {
-        buffer.append(consume());
+        buffer.push_back(consume());
         parseList<isPossibleExpressionOrTripleAnd, isEndOfConditionalPredicate>(
             buffer, endKind, TokenKind::TripleAnd, end, RequireItems::True,
             diag::ExpectedConditionalPattern, [this] { return &parseConditionalPattern(); });
@@ -978,8 +1009,8 @@ EventExpressionSyntax& Parser::parseEventExpression() {
         if (expr.kind == SyntaxKind::SignalEventExpression) {
             auto& see = expr.as<SignalEventExpressionSyntax>();
             if (!see.edge && !see.iffClause) {
-                ExpressionSyntax* newExpr =
-                    &factory.parenthesizedExpression(openParen, *see.expr, closeParen);
+                ExpressionSyntax* newExpr = &factory.parenthesizedExpression(openParen, *see.expr,
+                                                                             closeParen);
 
                 newExpr = &parsePostfixExpression(*newExpr, ExpressionOptions::None);
                 newExpr = &parseBinaryExpression(newExpr, ExpressionOptions::None, 0);
@@ -1107,6 +1138,13 @@ TimingControlSyntax* Parser::parseTimingControl() {
                                                              expect(TokenKind::CloseParenthesis));
                     }
 
+                    // Special case since @(*) will be lexed as '@' '(' '*)'
+                    if (peek(TokenKind::StarCloseParenthesis)) {
+                        auto starCloseParen = consume();
+                        return &factory.implicitEventControl(at, openParen, starCloseParen,
+                                                             Token());
+                    }
+
                     auto& eventExpr = parseEventExpression();
                     auto closeParen = expect(TokenKind::CloseParenthesis);
                     return &factory.eventControlWithExpression(
@@ -1121,7 +1159,7 @@ TimingControlSyntax* Parser::parseTimingControl() {
                 case TokenKind::Star:
                     return &factory.implicitEventControl(at, Token(), consume(), Token());
                 default:
-                    return &factory.eventControl(at, parseName());
+                    return &factory.eventControl(at, parseName(NameOptions::NoClassScope));
             }
         }
         case TokenKind::RepeatKeyword: {
@@ -1208,7 +1246,7 @@ SelectorSyntax* Parser::parseSequenceRange() {
 }
 
 SequenceExprSyntax& Parser::parseDelayedSequenceExpr(SequenceExprSyntax* first) {
-    SmallVectorSized<DelayedSequenceElementSyntax*, 4> elements;
+    SmallVector<DelayedSequenceElementSyntax*> elements;
     do {
         Token op, openBracket, closeBracket;
         SelectorSyntax* selector = nullptr;
@@ -1232,8 +1270,8 @@ SequenceExprSyntax& Parser::parseDelayedSequenceExpr(SequenceExprSyntax* first) 
         }
 
         auto& expr = parseSequencePrimary();
-        elements.append(&factory.delayedSequenceElement(hash, delayVal, openBracket, op, selector,
-                                                        closeBracket, expr));
+        elements.push_back(&factory.delayedSequenceElement(hash, delayVal, openBracket, op,
+                                                           selector, closeBracket, expr));
 
     } while (peek(TokenKind::DoubleHash));
 
@@ -1279,9 +1317,10 @@ SequenceMatchListSyntax* Parser::parseSequenceMatchList(Token& closeParen) {
 
     Token comma;
     span<TokenOrSyntax> list;
-    parseList<isPossibleArgument, isEndOfParenList>(
-        TokenKind::Comma, TokenKind::CloseParenthesis, TokenKind::Comma, comma, list, closeParen,
-        RequireItems::True, diag::ExpectedExpression, [this] { return &parsePropertyExpr(0); });
+    parseList<isPossibleArgument, isEndOfParenList>(TokenKind::Comma, TokenKind::CloseParenthesis,
+                                                    TokenKind::Comma, comma, list, closeParen,
+                                                    RequireItems::True, diag::ExpectedExpression,
+                                                    [this] { return &parsePropertyExpr(0); });
 
     return &factory.sequenceMatchList(comma, list);
 }
@@ -1437,7 +1476,7 @@ PropertyExprSyntax& Parser::parseCasePropertyExpr() {
     auto& condition = parseExpressionOrDist();
     auto closeParen = expect(TokenKind::CloseParenthesis);
 
-    SmallVectorSized<PropertyCaseItemSyntax*, 8> itemBuffer;
+    SmallVector<PropertyCaseItemSyntax*> itemBuffer;
     SourceLocation lastDefault;
     bool errored = false;
 
@@ -1456,18 +1495,18 @@ PropertyExprSyntax& Parser::parseCasePropertyExpr() {
             auto colon = consumeIf(TokenKind::Colon);
             auto& expr = parsePropertyExpr(0);
             auto semi = expect(TokenKind::Semicolon);
-            itemBuffer.append(&factory.defaultPropertyCaseItem(def, colon, expr, semi));
+            itemBuffer.push_back(&factory.defaultPropertyCaseItem(def, colon, expr, semi));
         }
         else if (isPossibleExpression(kind)) {
             Token colon;
-            SmallVectorSized<TokenOrSyntax, 8> buffer;
+            SmallVector<TokenOrSyntax, 8> buffer;
             parseList<isPossibleExpressionOrComma, isEndOfCaseItem>(
                 buffer, TokenKind::Colon, TokenKind::Comma, colon, RequireItems::True,
                 diag::ExpectedExpression, [this] { return &parseExpressionOrDist(); });
 
             auto& expr = parsePropertyExpr(0);
             auto semi = expect(TokenKind::Semicolon);
-            itemBuffer.append(
+            itemBuffer.push_back(
                 &factory.standardPropertyCaseItem(buffer.copy(alloc), colon, expr, semi));
         }
         else {
@@ -1530,7 +1569,7 @@ PropertyExprSyntax& Parser::parsePropertyPrimary() {
             // when parsing a property instance argument, we may be looking at an event
             // expression here. The first term of an event expression may be an `iff`
             // expression that gets parsed as a property expression, and we want to allow
-            // a comma separated list of events to follow. Binding will disambiguate this
+            // a comma separated list of events to follow. AST will disambiguate this
             // later when we learn what kind of expression we're actually being used in.
             Token closeParen;
             auto matchList = parseSequenceMatchList(closeParen);
@@ -1665,11 +1704,12 @@ PropertyExprSyntax& Parser::parsePropertyExpr(int precedence) {
             left->kind == SyntaxKind::SimplePropertyExpr &&
             right.kind == SyntaxKind::SimplePropertyExpr) {
 
-            auto& seqExpr = factory.binarySequenceExpr(
-                opKind == SyntaxKind::AndPropertyExpr ? SyntaxKind::AndSequenceExpr
-                                                      : SyntaxKind::OrSequenceExpr,
-                *left->as<SimplePropertyExprSyntax>().expr, opToken,
-                *right.as<SimplePropertyExprSyntax>().expr);
+            auto& seqExpr = factory.binarySequenceExpr(opKind == SyntaxKind::AndPropertyExpr
+                                                           ? SyntaxKind::AndSequenceExpr
+                                                           : SyntaxKind::OrSequenceExpr,
+                                                       *left->as<SimplePropertyExprSyntax>().expr,
+                                                       opToken,
+                                                       *right.as<SimplePropertyExprSyntax>().expr);
 
             left = &factory.simplePropertyExpr(seqExpr);
         }
@@ -1681,4 +1721,4 @@ PropertyExprSyntax& Parser::parsePropertyExpr(int precedence) {
     return *left;
 }
 
-} // namespace slang
+} // namespace slang::parsing

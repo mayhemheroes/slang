@@ -2,7 +2,8 @@
 //! @file Diagnostics.h
 //! @brief Diagnostic definitions
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -19,7 +20,10 @@
 namespace slang {
 
 class SourceManager;
+
+namespace ast {
 class Symbol;
+}
 
 // clang-format off
 #define DS(x) \
@@ -50,28 +54,53 @@ ENUM_SIZED(DiagSubsystem, uint16_t, DS)
     x(Error) \
     x(Fatal)
 ENUM(DiagnosticSeverity, DS)
+#undef DS
 // clang-format on
 
-class DiagCode {
+/// @brief A compact code that represents a diagnostic.
+///
+/// Diagnostics are messages issued to users in the form of notes,
+/// warnings, or errors. DiagCodes are partitioned into subystems
+/// to help keep unrelated diagnostics separated from each other.
+class SLANG_EXPORT DiagCode {
 public:
+    /// Default constructor, object will return false for @a valid
     constexpr DiagCode() : subsystem(DiagSubsystem::Invalid), code(0) {}
+
+    /// Constructs a new DiagCode with the given subsystem and code number.
     constexpr DiagCode(DiagSubsystem subsystem, uint16_t code) : subsystem(subsystem), code(code) {}
 
+    /// Gets the subsystem with which this DiagCode is associated.
     constexpr DiagSubsystem getSubsystem() const { return subsystem; }
+
+    /// Gets the raw numeric code of this DiagCode, unique within its subsystem.
     constexpr uint16_t getCode() const { return code; }
 
+    /// @brief Checks whether the DiagCode is valid.
+    ///
+    /// Any DiagCode with a subsystem of DiagSubsystem::Invalid will return false,
+    /// (which is true for a default constructed DiagCode object).
     constexpr bool valid() const { return subsystem != DiagSubsystem::Invalid; }
 
+    /// Explicit boolean conversion operator that defers to @a valid
     constexpr explicit operator bool() const { return valid(); }
 
+    /// Equality comparison.
     constexpr bool operator==(DiagCode other) const {
         return subsystem == other.subsystem && code == other.code;
     }
 
+    /// Inequality comparison.
     constexpr bool operator!=(DiagCode other) const { return !(*this == other); }
 
-    constexpr bool operator<(DiagCode other) const { return code < other.code; }
+    /// Less-than comparison.
+    constexpr bool operator<(DiagCode other) const {
+        return subsystem < other.subsystem || (subsystem == other.subsystem && code < other.code);
+    }
 
+    /// @brief A list of all "known" DiagCodes.
+    ///
+    /// Known codes are ones baked into the library by the diagnostic_gen.py tool.
     static const span<const DiagCode> KnownCodes;
 
 private:
@@ -79,18 +108,18 @@ private:
     uint16_t code;
 };
 
-std::ostream& operator<<(std::ostream& os, DiagCode code);
-string_view toString(DiagCode code);
+SLANG_EXPORT std::ostream& operator<<(std::ostream& os, DiagCode code);
+SLANG_EXPORT string_view toString(DiagCode code);
 
 /// Wraps up a reported diagnostic along with location in source and any arguments.
-class Diagnostic {
+class SLANG_EXPORT Diagnostic {
 public:
     // Diagnostic-specific arguments that can be used to better report messages.
     using Arg = std::variant<std::string, int64_t, uint64_t, char, ConstantValue, std::any>;
     std::vector<Arg> args;
     std::vector<SourceRange> ranges;
     std::vector<Diagnostic> notes;
-    optional<size_t> coalesceCount;
+    std::optional<size_t> coalesceCount;
 
     /// The specific kind of diagnostic that was issued.
     DiagCode code;
@@ -99,13 +128,16 @@ public:
     SourceLocation location;
 
     /// The symbol in which the diagnostic occurred, or null if not applicable.
-    const Symbol* symbol = nullptr;
+    const ast::Symbol* symbol = nullptr;
+
+    /// Default constructs a new Diagnostic entry.
+    Diagnostic() noexcept;
 
     /// Constructs a new Diagnostic entry with the given code and location.
     Diagnostic(DiagCode code, SourceLocation location) noexcept;
 
     /// Constructs a new Diagnostic entry with the given symbol, code and location.
-    Diagnostic(const Symbol& source, DiagCode code, SourceLocation location) noexcept;
+    Diagnostic(const ast::Symbol& source, DiagCode code, SourceLocation location) noexcept;
 
     /// Returns true if this diagnostic's code is intrinsically considered an error,
     /// regardless of what severity mapping rules might be in place.
@@ -125,6 +157,8 @@ public:
     Diagnostic& operator<<(real_t arg);
     Diagnostic& operator<<(shortreal_t arg);
 
+    Diagnostic& addStringAllowEmpty(const std::string& arg);
+
     template<typename T, typename = std::enable_if_t<std::is_integral_v<T> && std::is_signed_v<T>>>
     Diagnostic& operator<<(T arg) {
         args.emplace_back((int64_t)arg);
@@ -143,11 +177,8 @@ public:
 };
 
 /// A collection of diagnostics.
-class Diagnostics : public SmallVectorSized<Diagnostic, 2> {
+class SLANG_EXPORT Diagnostics : public SmallVector<Diagnostic> {
 public:
-    Diagnostics() = default;
-    Diagnostics(Diagnostics&& other) noexcept = default;
-
     /// Adds a new diagnostic to the collection, pointing to the given source location.
     Diagnostic& add(DiagCode code, SourceLocation location);
 
@@ -155,16 +186,16 @@ public:
     Diagnostic& add(DiagCode code, SourceRange range);
 
     /// Adds a new diagnostic to the collection, pointing to the given source location.
-    Diagnostic& add(const Symbol& source, DiagCode code, SourceLocation location);
+    Diagnostic& add(const ast::Symbol& source, DiagCode code, SourceLocation location);
 
     /// Adds a new diagnostic to the collection, highlighting the given source range.
-    Diagnostic& add(const Symbol& source, DiagCode code, SourceRange range);
+    Diagnostic& add(const ast::Symbol& source, DiagCode code, SourceRange range);
 
     /// Sorts the diagnostics in the collection based on source file and line number.
     void sort(const SourceManager& sourceManager);
 };
 
-class DiagGroup {
+class SLANG_EXPORT DiagGroup {
 public:
     explicit DiagGroup(const std::string& name, const std::vector<DiagCode>& diags) :
         name(name), diags(diags) {}

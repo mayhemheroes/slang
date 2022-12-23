@@ -2,16 +2,16 @@
 // NumberParser.cpp
 // Helper type to construct numeric tokens
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/parsing/NumberParser.h"
 
-#include "../text/CharInfo.h"
-
 #include "slang/diagnostics/LexerDiags.h"
+#include "slang/text/CharInfo.h"
 #include "slang/util/String.h"
 
-namespace slang {
+namespace slang::parsing {
 
 static logic_t getLogicCharValue(char c) {
     switch (c) {
@@ -58,7 +58,7 @@ void NumberParser::startVector(Token baseToken, Token sizeToken) {
 }
 
 int NumberParser::append(Token token, bool isFirst) {
-    text.appendRange(token.rawText());
+    text.append(token.rawText());
 
     // If we've had an error thus far, don't bother doing anything else that
     // might just add more errors on the pile.
@@ -162,7 +162,7 @@ int NumberParser::append(Token token, bool isFirst) {
             }
             break;
         default:
-            THROW_UNREACHABLE;
+            ASSUME_UNREACHABLE;
     }
 
     valid = true;
@@ -211,7 +211,7 @@ Token NumberParser::finishValue(Token firstToken, bool singleToken) {
     }
 
     if (digits.empty()) {
-        digits.append(logic_t(0));
+        digits.push_back(logic_t(0));
     }
     else if (literalBase != LiteralBase::Decimal) {
         uint32_t multiplier = 0;
@@ -226,7 +226,7 @@ Token NumberParser::finishValue(Token firstToken, bool singleToken) {
                 multiplier = 4;
                 break;
             default:
-                THROW_UNREACHABLE;
+                ASSUME_UNREACHABLE;
         }
 
         // All of the digits in the number require `multiplier` bits, except for
@@ -275,10 +275,10 @@ void NumberParser::addDigit(logic_t digit, int maxValue) {
                 return; // at most one leading zero
 
             // If first nonzero not unknown, no leading zeros
-            digits.pop();
+            digits.pop_back();
         }
     }
-    digits.append(digit);
+    digits.push_back(digit);
 }
 
 Diagnostic& NumberParser::addDiag(DiagCode code, SourceLocation location) {
@@ -289,8 +289,10 @@ NumberParser::IntResult NumberParser::reportMissingDigits(Token sizeToken, Token
                                                           Token first) {
     // If we issued this error in response to seeing an EOF token, back up and put
     // the error on the last consumed token instead.
-    SourceLocation errLoc = first.location();
-    if (first.kind == TokenKind::EndOfFile)
+    SourceLocation errLoc;
+    if (first && first.kind != TokenKind::EndOfFile)
+        errLoc = first.location();
+    else
         errLoc = baseToken.location() + baseToken.rawText().size();
 
     addDiag(diag::ExpectedVectorDigits, errLoc);
@@ -305,4 +307,4 @@ void NumberParser::reportIntOverflow(Token token) {
     addDiag(diag::SignedIntegerOverflow, token.location()) << val;
 }
 
-} // namespace slang
+} // namespace slang::parsing

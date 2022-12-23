@@ -2,7 +2,8 @@
 // Diagnostics.cpp
 // Diagnostic tracking and reporting
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/diagnostics/Diagnostics.h"
 
@@ -13,11 +14,14 @@ namespace slang {
 // Defined in the generated DiagCode.cpp file.
 DiagnosticSeverity getDefaultSeverity(DiagCode code);
 
+Diagnostic::Diagnostic() noexcept : location(SourceLocation::NoLocation) {
+}
+
 Diagnostic::Diagnostic(DiagCode code, SourceLocation location) noexcept :
     code(code), location(location) {
 }
 
-Diagnostic::Diagnostic(const Symbol& source, DiagCode code, SourceLocation location) noexcept :
+Diagnostic::Diagnostic(const ast::Symbol& source, DiagCode code, SourceLocation location) noexcept :
     code(code), location(location), symbol(&source) {
 }
 
@@ -40,12 +44,19 @@ Diagnostic& Diagnostic::addNote(const Diagnostic& diag) {
     return notes.back();
 }
 
+Diagnostic& Diagnostic::addStringAllowEmpty(const std::string& arg) {
+    args.emplace_back(arg);
+    return *this;
+}
+
 Diagnostic& Diagnostic::operator<<(const std::string& arg) {
+    ASSERT(!arg.empty());
     args.emplace_back(arg);
     return *this;
 }
 
 Diagnostic& Diagnostic::operator<<(string_view arg) {
+    ASSERT(!arg.empty());
     args.emplace_back(std::string(arg));
     return *this;
 }
@@ -113,7 +124,7 @@ bool Diagnostic::operator==(const Diagnostic& rhs) const {
 
 Diagnostic& Diagnostics::add(DiagCode code, SourceLocation location) {
     ASSERT(location);
-    emplace(code, location);
+    emplace_back(code, location);
     return back();
 }
 
@@ -121,13 +132,13 @@ Diagnostic& Diagnostics::add(DiagCode code, SourceRange range) {
     return add(code, range.start()) << range;
 }
 
-Diagnostic& Diagnostics::add(const Symbol& source, DiagCode code, SourceLocation location) {
+Diagnostic& Diagnostics::add(const ast::Symbol& source, DiagCode code, SourceLocation location) {
     ASSERT(location);
-    emplace(source, code, location);
+    emplace_back(source, code, location);
     return back();
 }
 
-Diagnostic& Diagnostics::add(const Symbol& source, DiagCode code, SourceRange range) {
+Diagnostic& Diagnostics::add(const ast::Symbol& source, DiagCode code, SourceRange range) {
     return add(source, code, range.start()) << range;
 }
 

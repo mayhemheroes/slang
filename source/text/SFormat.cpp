@@ -2,19 +2,23 @@
 // SFormat.cpp
 // SystemVerilog string formatting routines
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/text/SFormat.h"
 
-#include "../text/CharInfo.h"
 #include <ieee1800/vpi_user.h>
+#include <ostream>
 
 #include "slang/diagnostics/SysFuncsDiags.h"
+#include "slang/text/CharInfo.h"
 #include "slang/util/String.h"
+
+static const double log2_10 = log2(10.0);
 
 namespace slang::SFormat {
 
-static optional<uint32_t> parseUInt(const char*& ptr, const char* end) {
+static std::optional<uint32_t> parseUInt(const char*& ptr, const char* end) {
     size_t pos;
     auto result = strToUInt(string_view(ptr, size_t(end - ptr)), &pos);
     if (result)
@@ -25,26 +29,26 @@ static optional<uint32_t> parseUInt(const char*& ptr, const char* end) {
 
 bool parse(string_view str, function_ref<void(string_view)> onText,
            function_ref<void(char, size_t, size_t, const FormatOptions&)> onArg,
-           function_ref<void(DiagCode, size_t, size_t, optional<char>)> onError) {
-    SmallVectorSized<char, 16> text;
+           function_ref<void(DiagCode, size_t, size_t, std::optional<char>)> onError) {
+    SmallVector<char> text;
     const char* ptr = str.data();
     const char* end = str.data() + str.length();
 
-    auto err = [&](DiagCode code, const char* curr, optional<char> spec = {}) {
+    auto err = [&](DiagCode code, const char* curr, std::optional<char> spec = {}) {
         onError(code, size_t(curr - str.data()), size_t(ptr - curr), spec);
     };
 
     while (ptr != end) {
         const char* start = ptr;
         if (char c = *ptr++; c != '%') {
-            text.append(c);
+            text.push_back(c);
             continue;
         }
 
         // %% collapses to a single %
         if (ptr != end && *ptr == '%') {
             ptr++;
-            text.append('%');
+            text.push_back('%');
             continue;
         }
 
@@ -88,7 +92,7 @@ bool parse(string_view str, function_ref<void(string_view)> onText,
 
         if (ptr == end) {
             err(diag::MissingFormatSpecifier, start);
-            text.append('%');
+            text.push_back('%');
             break;
         }
 
@@ -164,7 +168,7 @@ bool parse(string_view str, function_ref<void(string_view)> onText,
 
 void formatInt(std::string& result, const SVInt& value, LiteralBase base,
                const FormatOptions& options) {
-    SmallVectorSized<char, 32> buffer;
+    SmallVector<char> buffer;
     if (base != LiteralBase::Decimal && value.isSigned()) {
         // Non-decimal bases don't print as signed ever.
         SVInt copy = value;
@@ -181,7 +185,6 @@ void formatInt(std::string& result, const SVInt& value, LiteralBase base,
     if (options.width)
         width = *options.width;
     else {
-        static const double log2_10 = log2(10.0);
         bitwidth_t bw = value.getBitWidth();
         switch (base) {
             case LiteralBase::Binary:
@@ -220,20 +223,20 @@ void formatInt(std::string& result, const SVInt& value, LiteralBase base,
 
 static void formatFloat(std::string& result, double value, char specifier,
                         const FormatOptions& options) {
-    SmallVectorSized<char, 8> fmt;
-    fmt.append('%');
+    SmallVector<char, 8> fmt;
+    fmt.push_back('%');
     if (options.leftJustify)
-        fmt.append('-');
+        fmt.push_back('-');
     if (options.zeroPad)
-        fmt.append('0');
+        fmt.push_back('0');
     if (options.width)
         uintToStr(fmt, *options.width);
     if (options.precision) {
-        fmt.append('.');
+        fmt.push_back('.');
         uintToStr(fmt, *options.precision);
     }
-    fmt.append(specifier);
-    fmt.append('\0');
+    fmt.push_back(specifier);
+    fmt.push_back('\0');
 
     size_t cur = result.size();
     size_t sz = (size_t)snprintf(nullptr, 0, fmt.data(), value);
@@ -340,7 +343,7 @@ void formatStrength(std::string& result, const SVInt& value) {
                 result += "HiZ";
                 break;
             default:
-                THROW_UNREACHABLE;
+                ASSUME_UNREACHABLE;
         }
 
         if (i != 1)
@@ -391,7 +394,7 @@ void formatArg(std::string& result, const ConstantValue& arg, char specifier,
             formatString(result, arg.convertToStr().str(), options);
             return;
         default:
-            THROW_UNREACHABLE;
+            ASSUME_UNREACHABLE;
     }
 }
 

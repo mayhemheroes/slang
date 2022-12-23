@@ -2,7 +2,8 @@
 //! @file NotNull.h
 //! @brief Contains the not_null pointer utility class
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -17,7 +18,7 @@ namespace slang {
 /// The real value of this type is in documenting in the API the intentions of the pointer,
 /// so that consumers don't need to add explicit null checks.
 template<typename T>
-class not_null {
+class SLANG_EXPORT not_null {
 public:
     static_assert(std::is_assignable<T&, std::nullptr_t>::value, "T cannot be assigned nullptr.");
 

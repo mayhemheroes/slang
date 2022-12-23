@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
 #include "slang/diagnostics/DiagnosticClient.h"
@@ -276,7 +279,7 @@ TEST_CASE("Diag range within macro arg") {
 
 module m;
     int i;
-    int j = `PASS(i + 1, ());
+    int j = `PASS(i + , null);
 endmodule
 )");
 
@@ -286,12 +289,12 @@ endmodule
     auto& diagnostics = compilation.getAllDiagnostics();
     std::string result = "\n" + report(diagnostics);
     CHECK(result == R"(
-source:6:26: error: expression is not callable
-    int j = `PASS(i + 1, ());
-                      ~  ^
-source:2:31: note: expanded from macro 'PASS'
+source:6:21: error: invalid operands to binary expression ('int' and 'null')
+    int j = `PASS(i + , null);
+                  ~ ^   ~~~~
+source:2:26: note: expanded from macro 'PASS'
 `define PASS(asdf, barr) asdf barr
-                         ~~~~ ^
+                         ^~~~ ~~~~
 )");
 }
 
@@ -346,9 +349,9 @@ endmodule
     CHECK(result == R"(
 in file included from source:5:
 in file included from fake-include1.svh:2:
-fake-include2.svh:2:7: error: expression is not callable
+fake-include2.svh:2:6: error: expected ';'
 i + 1 ()
-    ~ ^
+     ^
 )");
 }
 
@@ -467,8 +470,7 @@ TEST_CASE("DiagnosticEngine stuff") {
 TEST_CASE("DiagnosticEngine::setWarningOptions") {
     auto options = std::vector{
         "everything"s, "none"s,     "error"s, "error=case-gen-dup"s, "no-error=empty-member"s,
-        "empty-stmt"s, "no-extra"s, "asdf"s
-    };
+        "empty-stmt"s, "no-extra"s, "asdf"s};
 
     DiagnosticEngine engine(getSourceManager());
     engine.setDefaultWarnings();
@@ -524,5 +526,53 @@ source:9:5: error: extra ';' has no effect [-Wempty-member]
 source:11:5: warning: extra ';' has no effect [-Wempty-member]
     ; // warn
     ^
+)");
+}
+
+TEST_CASE("Diagnostics with Unicode and tabs in source snippet") {
+    auto tree = SyntaxTree::fromText(u8R"(
+module m;
+    string s = "literal\🍌";
+    int 	/* // 꿽꿽꿽꿽꿽꿽꿽 */		갑곯꿽 = "꿽꿽꿽"; // 꿽꿽꿽꿽꿽꿽꿽
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diagnostics = compilation.getAllDiagnostics();
+    std::string result = "\n" + report(diagnostics);
+    std::string check = R"(
+source:3:24: warning: unknown character escape sequence '\🍌' [-Wunknown-escape-code]
+    string s = "literal\🍌";
+                       ^
+source:4:42: error: UTF-8 sequence in source text; SystemVerilog identifiers must be ASCII
+    int         /* // 꿽꿽꿽꿽꿽꿽꿽 */          갑곯꿽 = "꿽꿽꿽"; // 꿽꿽꿽꿽꿽꿽꿽
+                                                 ^
+source:4:42: error: expected a declaration name
+    int         /* // 꿽꿽꿽꿽꿽꿽꿽 */          갑곯꿽 = "꿽꿽꿽"; // 꿽꿽꿽꿽꿽꿽꿽
+                                                 ^
+)";
+    CHECK(result == check);
+}
+
+TEST_CASE("Diagnostics with invalid UTF8 printed") {
+    auto tree = SyntaxTree::fromText("module m;\n"
+                                     "    string s = \"literal \xed\xa0\x80\xed\xa0\x80\";\n"
+                                     "    int i = /* asdf a\u0308\u0019\U0001057B */ a;\n"
+                                     "endmodule\n");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diagnostics = compilation.getAllDiagnostics();
+    std::string result = "\n" + report(diagnostics);
+    CHECK(result == R"(
+source:2:25: warning: invalid UTF-8 sequence in source text [-Winvalid-source-encoding]
+    string s = "literal <ED><A0><80><ED><A0><80>";
+                        ^
+source:3:33: error: use of undeclared identifier 'a'
+    int i = /* asdf ä<U+19><U+1057B> */ a;
+                                        ^
 )");
 }

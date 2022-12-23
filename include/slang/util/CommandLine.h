@@ -2,11 +2,14 @@
 //! @file CommandLine.h
 //! @brief Command line argument parsing support
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
+#include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -52,7 +55,7 @@ namespace slang {
 /// an error is reported. If the name is "close" to one of the registered names,
 /// the error will provide a helpful "did you mean" hint.
 ///
-class CommandLine {
+class SLANG_EXPORT CommandLine {
 public:
     /// Register a flag with @a name that will be parsed as a boolean value,
     /// setting to `true` if no value is provided, and otherwise accepting
@@ -62,7 +65,7 @@ public:
     /// @name is a comma separated list of long form and short form names
     /// (including the dashes) that are accepted for this option.
     /// @a desc is a human-friendly description for printing help text.
-    void add(string_view name, optional<bool>& value, string_view desc);
+    void add(string_view name, std::optional<bool>& value, string_view desc);
 
     /// Register an option with @a name that will be parsed as an int32.
     /// If the option is not provided on a command line, the value will remain unset.
@@ -71,7 +74,7 @@ public:
     /// (including the dashes) that are accepted for this option.
     /// @a desc is a human-friendly description for printing help text.
     /// @a valueName is an example name for the value when printing help text.
-    void add(string_view name, optional<int32_t>& value, string_view desc,
+    void add(string_view name, std::optional<int32_t>& value, string_view desc,
              string_view valueName = {});
 
     /// Register an option with @a name that will be parsed as a uint32.
@@ -81,7 +84,7 @@ public:
     /// (including the dashes) that are accepted for this option.
     /// @a desc is a human-friendly description for printing help text.
     /// @a valueName is an example name for the value when printing help text.
-    void add(string_view name, optional<uint32_t>& value, string_view desc,
+    void add(string_view name, std::optional<uint32_t>& value, string_view desc,
              string_view valueName = {});
 
     /// Register an option with @a name that will be parsed as an int64.
@@ -91,7 +94,7 @@ public:
     /// (including the dashes) that are accepted for this option.
     /// @a desc is a human-friendly description for printing help text.
     /// @a valueName is an example name for the value when printing help text.
-    void add(string_view name, optional<int64_t>& value, string_view desc,
+    void add(string_view name, std::optional<int64_t>& value, string_view desc,
              string_view valueName = {});
 
     /// Register an option with @a name that will be parsed as a uint64.
@@ -101,7 +104,7 @@ public:
     /// (including the dashes) that are accepted for this option.
     /// @a desc is a human-friendly description for printing help text.
     /// @a valueName is an example name for the value when printing help text.
-    void add(string_view name, optional<uint64_t>& value, string_view desc,
+    void add(string_view name, std::optional<uint64_t>& value, string_view desc,
              string_view valueName = {});
 
     /// Register an option with @a name that will be parsed as a double.
@@ -111,7 +114,7 @@ public:
     /// (including the dashes) that are accepted for this option.
     /// @a desc is a human-friendly description for printing help text.
     /// @a valueName is an example name for the value when printing help text.
-    void add(string_view name, optional<double>& value, string_view desc,
+    void add(string_view name, std::optional<double>& value, string_view desc,
              string_view valueName = {});
 
     /// Register an option with @a name that will be parsed as a string.
@@ -123,7 +126,7 @@ public:
     /// @a valueName is an example name for the value when printing help text.
     /// @a isFileName indicates whether the parsed string is a filename that
     ///               might be relative to the current directory.
-    void add(string_view name, optional<std::string>& value, string_view desc,
+    void add(string_view name, std::optional<std::string>& value, string_view desc,
              string_view valueName = {}, bool isFileName = false);
 
     /// Register an option with @a name that will be parsed as a list of int32s.
@@ -188,13 +191,55 @@ public:
     void add(string_view name, std::vector<std::string>& value, string_view desc,
              string_view valueName = {}, bool isFileName = false);
 
+    using OptionCallback = std::function<std::string(string_view)>;
+
+    /// Register an option with @a name that will be parsed as a string and
+    /// forwarded to the given @a cb callback function for handling.
+    /// If the option is not provided on a command line, the callback
+    /// will never be invoked.
+    ///
+    /// @name is a comma separated list of long form and short form names
+    /// (including the dashes) that are accepted for this option.
+    /// @a desc is a human-friendly description for printing help text.
+    /// @a valueName is an example name for the value when printing help text.
+    /// @a isFileName indicates whether the parsed string is a filename that
+    ///               might be relative to the current directory.
+    void add(string_view name, OptionCallback cb, string_view desc, string_view valueName = {},
+             bool isFileName = false);
+
     /// Set a variable that will receive any positional arguments provided
     /// on the command line. They will be returned as a list of strings.
     /// @a valueName is for including in the help text.
     /// @a isFileName indicates whether the parsed string is a filename that
     ///               might be relative to the current directory.
+    /// @note only one variable or callback be set to receive positional arguments.
     void setPositional(std::vector<std::string>& values, string_view valueName,
                        bool isFileName = false);
+
+    /// Set a callback that will receive any positional arguments provided
+    /// on the command line.
+    /// @a valueName is for including in the help text.
+    /// @a isFileName indicates whether the parsed string is a filename that
+    ///               might be relative to the current directory.
+    /// @note only one variable or callback be set to receive positional arguments.
+    void setPositional(OptionCallback cb, string_view valueName, bool isFileName = false);
+
+    /// Adds a command that will be ignored if encountered during argument parsing.
+    /// @param value a string containing a single comma-separated "name,value" pair,
+    ///              where the name is the argument to ignore (including any leading
+    ///              '+' and '-' characters) and the value is an integer indicating the
+    ///              (possibly zero) number of arguments to ignore following it in the
+    ///              argument list.
+    /// @returns a string containing an error message if the @a value is malformed.
+    std::string addIgnoreCommand(string_view value);
+
+    /// Adds a command that will be renamed to one of the existing commands already registered.
+    /// @param value a string containing a single comma-separated "from,to" pair, where the
+    ///              "from" is the command that should be renamed whenever encountered in the
+    ///              argument list (including any leading '+' and '-' characters), and "to" is
+    ///              the new name it should have.
+    /// @returns a string containing an error message if the @a value is malformed.
+    std::string addRenameCommand(string_view value);
 
     /// Parse the provided command line (C-style).
     /// @return true on success, false if an errors occurs.
@@ -238,19 +283,13 @@ public:
     bool parse(span<const string_view> args, ParseOptions options = {});
 
     /// Gets the name of the program, parsed out of the first item on the command line.
-    string_view getProgramName() const {
-        return programName;
-    }
+    string_view getProgramName() const { return programName; }
 
     /// Manually set the program name for later use in help text.
-    void setProgramName(string_view name) {
-        programName = name;
-    }
+    void setProgramName(string_view name) { programName = name; }
 
     /// Gets the set of errors that were encountered when parsing command line options.
-    span<const std::string> getErrors() const {
-        return errors;
-    }
+    span<const std::string> getErrors() const { return errors; }
 
     /// Gets a string representing program help text, based on registered flags.
     /// @a overview text is a human friendly description of what the program does.
@@ -258,10 +297,11 @@ public:
 
 private:
     using OptionStorage =
-        std::variant<optional<bool>*, optional<int32_t>*, optional<uint32_t>*, optional<int64_t>*,
-                     optional<uint64_t>*, optional<double>*, optional<std::string>*,
-                     std::vector<int32_t>*, std::vector<uint32_t>*, std::vector<int64_t>*,
-                     std::vector<uint64_t>*, std::vector<double>*, std::vector<std::string>*>;
+        std::variant<std::optional<bool>*, std::optional<int32_t>*, std::optional<uint32_t>*,
+                     std::optional<int64_t>*, std::optional<uint64_t>*, std::optional<double>*,
+                     std::optional<std::string>*, std::vector<int32_t>*, std::vector<uint32_t>*,
+                     std::vector<int64_t>*, std::vector<uint64_t>*, std::vector<double>*,
+                     std::vector<std::string>*, OptionCallback>;
 
     class Option {
     public:
@@ -276,22 +316,23 @@ private:
         std::string set(string_view name, string_view value, bool ignoreDup);
 
     private:
-        std::string set(optional<bool>& target, string_view name, string_view value);
-        std::string set(optional<int32_t>& target, string_view name, string_view value);
-        std::string set(optional<uint32_t>& target, string_view name, string_view value);
-        std::string set(optional<int64_t>& target, string_view name, string_view value);
-        std::string set(optional<uint64_t>& target, string_view name, string_view value);
-        std::string set(optional<double>& target, string_view name, string_view value);
-        std::string set(optional<std::string>& target, string_view name, string_view value);
+        std::string set(std::optional<bool>& target, string_view name, string_view value);
+        std::string set(std::optional<int32_t>& target, string_view name, string_view value);
+        std::string set(std::optional<uint32_t>& target, string_view name, string_view value);
+        std::string set(std::optional<int64_t>& target, string_view name, string_view value);
+        std::string set(std::optional<uint64_t>& target, string_view name, string_view value);
+        std::string set(std::optional<double>& target, string_view name, string_view value);
+        std::string set(std::optional<std::string>& target, string_view name, string_view value);
         std::string set(std::vector<int32_t>& target, string_view name, string_view value);
         std::string set(std::vector<uint32_t>& target, string_view name, string_view value);
         std::string set(std::vector<int64_t>& target, string_view name, string_view value);
         std::string set(std::vector<uint64_t>& target, string_view name, string_view value);
         std::string set(std::vector<double>& target, string_view name, string_view value);
         std::string set(std::vector<std::string>& target, string_view name, string_view value);
+        std::string set(OptionCallback& target, string_view name, string_view value);
 
         template<typename T>
-        static constexpr bool allowValue(const optional<T>& target) {
+        static constexpr bool allowValue(const std::optional<T>& target) {
             return !target.has_value();
         }
 
@@ -305,7 +346,7 @@ private:
                      string_view valueName, bool isFileName = false);
 
     void parseStr(string_view argList, ParseOptions options, bool& hasArg, std::string& current,
-                  SmallVector<std::string>& storage);
+                  SmallVectorBase<std::string>& storage);
 
     static std::string expandVar(const char*& ptr, const char* end);
 
@@ -318,6 +359,18 @@ private:
     std::shared_ptr<Option> positional;
     std::map<std::string, std::shared_ptr<Option>> optionMap;
     std::vector<std::shared_ptr<Option>> orderedOptions;
+
+    // A map of commands to be ignored.
+    // key is the command name (including any leading +/- symbols)
+    // value is an the number of arguments to be skipped (int)
+    // If argument begins with a '+' then matching will ignore anything after a 2nd '+'
+    // so that +vendorXYZ+vendorARG can be ignored by matching against +vendorXYZ
+    std::map<std::string, int> cmdIgnore;
+
+    /// A map of commands to be renamed, pointing to new name
+    /// key is the vendor command name (including any leading +/- symbols)
+    /// value is the command name to be used instead
+    std::map<std::string, std::string> cmdRename;
 
     std::string programName;
     std::vector<std::string> errors;

@@ -2,11 +2,12 @@
 // Assert.cpp
 // Contains assert-related utilities
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/util/Assert.h"
 
-#include <fmt/format.h>
+#include <fmt/core.h>
 
 namespace slang::assert {
 

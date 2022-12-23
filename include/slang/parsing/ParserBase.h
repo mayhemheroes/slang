@@ -2,7 +2,8 @@
 //! @file ParserBase.h
 //! @brief Base class for parsing
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -13,13 +14,13 @@
 #include "slang/text/SourceLocation.h"
 #include "slang/util/SmallVector.h"
 
-namespace slang {
+namespace slang::parsing {
 
 class Preprocessor;
 
 /// Base class for the Parser, which contains helpers and language-agnostic parsing routines.
 /// Mostly this helps keep the main Parser smaller and more focused.
-class ParserBase {
+class SLANG_EXPORT ParserBase {
 protected:
     ParserBase(Preprocessor& preprocessor);
 
@@ -109,17 +110,17 @@ protected:
     /// with bookend tokens in a way that robustly handles bad tokens.
     template<bool (*IsExpected)(TokenKind), bool (*IsEnd)(TokenKind), typename TParserFunc>
     void parseList(TokenKind openKind, TokenKind closeKind, TokenKind separatorKind,
-                   Token& openToken, span<TokenOrSyntax>& list, Token& closeToken,
+                   Token& openToken, span<syntax::TokenOrSyntax>& list, Token& closeToken,
                    RequireItems requireItems, DiagCode code, TParserFunc&& parseItem,
                    AllowEmpty allowEmpty = {}) {
         openToken = expect(openKind);
         if (openToken.isMissing()) {
             closeToken = missingToken(closeKind, openToken.location());
-            list = span<TokenOrSyntax>();
+            list = span<syntax::TokenOrSyntax>();
             return;
         }
 
-        SmallVectorSized<TokenOrSyntax, 32> buffer;
+        SmallVector<syntax::TokenOrSyntax, 16> buffer;
         parseList<IsExpected, IsEnd, TParserFunc>(buffer, closeKind, separatorKind, closeToken,
                                                   requireItems, code,
                                                   std::forward<TParserFunc>(parseItem), allowEmpty);
@@ -127,9 +128,9 @@ protected:
     }
 
     template<bool (*IsExpected)(TokenKind), bool (*IsEnd)(TokenKind), typename TParserFunc>
-    void parseList(SmallVector<TokenOrSyntax>& buffer, TokenKind closeKind, TokenKind separatorKind,
-                   Token& closeToken, RequireItems requireItems, DiagCode code,
-                   TParserFunc&& parseItem, AllowEmpty allowEmpty = {}) {
+    void parseList(SmallVectorBase<syntax::TokenOrSyntax>& buffer, TokenKind closeKind,
+                   TokenKind separatorKind, Token& closeToken, RequireItems requireItems,
+                   DiagCode code, TParserFunc&& parseItem, AllowEmpty allowEmpty = {}) {
         auto current = peek();
         if (IsEnd(current.kind)) {
             if (requireItems == RequireItems::True)
@@ -150,7 +151,7 @@ protected:
         while (true) {
             // Parse the next item in the list.
             current = peek();
-            buffer.append(parseItem());
+            buffer.push_back(parseItem());
 
             // If we found the end token, we're done with list processing.
             if (IsEnd(peek().kind))
@@ -181,7 +182,7 @@ protected:
                 } while (!peek(separatorKind));
             }
 
-            buffer.append(expect(separatorKind));
+            buffer.push_back(expect(separatorKind));
 
             if (IsEnd(peek().kind)) {
                 if (allowEmpty == AllowEmpty::True)
@@ -208,7 +209,7 @@ protected:
         auto current = peek();
         do {
             if (current.kind == TokenKind::EndOfFile || IsAbort(current.kind) ||
-                SyntaxFacts::isEndKeyword(current.kind)) {
+                syntax::SyntaxFacts::isEndKeyword(current.kind)) {
                 return false;
             }
 
@@ -227,8 +228,8 @@ private:
     void reportMisplacedSeparator();
 
     Window window;
-    SmallVectorSized<Token, 4> skippedTokens;
-    SmallVectorSized<Token, 4> openDelims;
+    SmallVector<Token> skippedTokens;
+    SmallVector<Token> openDelims;
 };
 
-} // namespace slang
+} // namespace slang::parsing

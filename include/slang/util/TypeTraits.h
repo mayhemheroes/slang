@@ -2,7 +2,8 @@
 //! @file TypeTraits.h
 //! @brief Various type trait template helpers
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -43,5 +44,14 @@ using detected_or = detail::detector<Default, void, Op, Args...>;
 
 template<template<class...> class Op, class... Args>
 constexpr bool is_detected_v = is_detected<Op, Args...>::value;
+
+template<typename TIter>
+using IteratorCategory = typename std::iterator_traits<TIter>::iterator_category;
+
+template<typename TIter, typename = void>
+inline constexpr bool is_iterator_v = false;
+
+template<typename TIter>
+inline constexpr bool is_iterator_v<TIter, std::void_t<IteratorCategory<TIter>>> = true;
 
 } // namespace slang

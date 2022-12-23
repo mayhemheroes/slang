@@ -1,15 +1,18 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
-#include "slang/binding/AssignmentExpressions.h"
-#include "slang/binding/MiscExpressions.h"
-#include "slang/compilation/Compilation.h"
-#include "slang/symbols/BlockSymbols.h"
-#include "slang/symbols/CompilationUnitSymbols.h"
-#include "slang/symbols/InstanceSymbols.h"
-#include "slang/symbols/ParameterSymbols.h"
-#include "slang/symbols/VariableSymbols.h"
+#include "slang/ast/Compilation.h"
+#include "slang/ast/expressions/AssignmentExpressions.h"
+#include "slang/ast/expressions/MiscExpressions.h"
+#include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/Type.h"
 #include "slang/syntax/SyntaxTree.h"
-#include "slang/types/Type.h"
 
 TEST_CASE("Explicit import lookup") {
     auto tree = SyntaxTree::fromText(R"(
@@ -26,7 +29,7 @@ import Foo::x;
     const CompilationUnitSymbol* unit = compilation.getRoot().compilationUnits[0];
 
     LookupResult result;
-    BindContext context(*unit, LookupLocation::max);
+    ASTContext context(*unit, LookupLocation::max);
     Lookup::name(compilation.parseName("x"), context, LookupFlags::None, result);
 
     CHECK(result.wasImported);
@@ -65,7 +68,7 @@ endmodule
 
     // Lookup at (1); should return the local parameter
     LookupResult result;
-    BindContext context(gen_b, LookupLocation::after(param));
+    ASTContext context(gen_b, LookupLocation::after(param));
     Lookup::name(compilation.parseName("x"), context, LookupFlags::None, result);
 
     const Symbol* symbol = result.found;
@@ -531,6 +534,7 @@ module m;
     always_comb array[-1+:-4][0].foo = 1;
     always_comb array[-1+:4][0].foo = 1;
 
+    always_comb array[-2147483647-:3][0].foo = 1;
 endmodule
 )");
 
@@ -547,6 +551,7 @@ endmodule
     CHECK((it++)->code == diag::InstanceArrayEndianMismatch);
     CHECK((it++)->code == diag::ValueMustBePositive);
     CHECK((it++)->code == diag::BadInstanceArrayRange);
+    CHECK((it++)->code == diag::RangeWidthOverflow);
     CHECK(it == diags.end());
 }
 
@@ -718,12 +723,12 @@ source:4:22: error: invalid access token; '.' should be '::'
 source:4:23: error: use of undeclared identifier 'foo'
     always_comb $unit.foo;
                       ^~~
-source:5:22: error: could not resolve hierarchical path name 'bar'
-    always_comb $root::bar;
-                     ^ ~~~
 source:5:22: error: invalid access token; '::' should be '.'
     always_comb $root::bar;
                      ^
+source:5:22: error: could not resolve hierarchical path name 'bar'
+    always_comb $root::bar;
+                     ^ ~~~
 source:6:17: error: use of undeclared identifier 'foo'
     always_comb foo.asdf::blah;
                 ^~~
@@ -986,9 +991,9 @@ source:77:19: error: no member named 'bar' in 'type_t'
 source:79:20: error: hierarchical scope 'array1' is not indexable
     wire n = array1[0].foo;     // no upward because indexing fails
                    ^~~
-source:54:12: note: declared here
+source:54:20: note: declared here
     if (1) begin : array1
-           ^
+                   ^
 source:81:21: error: hierarchical index 3 is out of scope's declared range
     wire p = array3[3].foo;     // no upward because indexing fails
                     ^
@@ -1558,6 +1563,23 @@ endmodule
     NO_COMPILATION_ERRORS;
 }
 
+TEST_CASE("Interface param with unknown module") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    an_interface #() u_an_interface ();
+    some_module #() u_an_instance( .the_inteface (u_an_interface) );
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 2);
+    CHECK(diags[0].code == diag::UnknownModule);
+    CHECK(diags[1].code == diag::UnknownModule);
+}
+
 TEST_CASE("Lookup with unused selectors") {
     auto tree = SyntaxTree::fromText(R"(
 interface I;
@@ -1800,6 +1822,177 @@ endmodule
 
 package pkg;
     parameter int baz = 3;
+endpackage
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Invalid name component lookup handling") {
+    auto tree = SyntaxTree::fromText(R"(
+class C;
+endclass
+
+module m;
+    C c;
+    int i = !new;
+    int k;
+    initial begin
+        k = c.randomize with { local::unique; };
+        k = c.randomize with { local::new; };
+        k = c.randomize with { local::local; };
+        k = new.foo;
+    end
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 6);
+    CHECK(diags[0].code == diag::UnexpectedNameToken);
+    CHECK(diags[1].code == diag::UnexpectedNameToken);
+    CHECK(diags[2].code == diag::ExpectedIdentifier);
+    CHECK(diags[3].code == diag::ExpectedToken);
+    CHECK(diags[4].code == diag::UnexpectedNameToken);
+    CHECK(diags[5].code == diag::NewKeywordQualified);
+}
+
+TEST_CASE("Port / attribute lookup location regress GH #676") {
+    auto tree = SyntaxTree::fromText(R"(
+interface I;
+endinterface
+
+module m (
+    clk,
+    ram,
+    iface
+);
+parameter S = "no_rw_check";
+
+input logic clk;
+
+(* ramstyle = S *)
+output reg [31:0] ram [15:0];
+
+(* ramstyle = S *)
+I iface;
+
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Used-before-declared opt-in corner case of self-referential symbol") {
+    auto tree = SyntaxTree::fromText(R"(
+parameter int i = 1;
+
+module m;
+    parameter int i = i;
+endmodule
+
+int foo;
+covergroup cg;
+    foo: coverpoint foo;
+endgroup
+)");
+
+    CompilationOptions options;
+    options.allowUseBeforeDeclare = true;
+
+    Compilation compilation(options);
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Exception for accessing incomplete forward typedef") {
+    auto tree = SyntaxTree::fromText(R"(
+typedef C;
+function void foo;
+    C::T::bar();
+endfunction
+
+class D;
+    static function void bar;
+    endfunction
+endclass
+
+class C;
+    typedef D T;
+endclass
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+    NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Package cannot refer to $unit or have hierarchical ref") {
+    auto tree = SyntaxTree::fromText(R"(
+int i;
+
+package p;
+    int j = i;
+    int k = $unit::i;
+    int l = m.l;
+
+    function foo;
+        static int n = bar.n;
+    endfunction
+
+    function bar;
+        int n;
+    endfunction
+endpackage
+
+module m;
+    int l;
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 3);
+    CHECK(diags[0].code == diag::CompilationUnitFromPackage);
+    CHECK(diags[1].code == diag::CompilationUnitFromPackage);
+    CHECK(diags[2].code == diag::HierarchicalFromPackage);
+}
+
+TEST_CASE("Virtual interface access is not necessarily hierarchical") {
+    auto tree = SyntaxTree::fromText(R"(
+interface Blah;
+    int i;
+endinterface
+
+interface Bus;
+    logic clk;
+    logic a;
+    clocking cb @(posedge clk);
+        output a;
+    endclocking
+
+    Blah blah();
+endinterface
+
+package P;
+    class BFM;
+        virtual Bus intf;
+        task drive_txn();
+            forever begin
+                @(intf.cb);
+                intf.cb.a <= 1'b1;
+                intf.blah.i = 1;
+            end
+        endtask
+    endclass
 endpackage
 )");
 

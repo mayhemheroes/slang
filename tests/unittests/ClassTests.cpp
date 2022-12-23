@@ -1,11 +1,14 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
-#include "slang/binding/Expression.h"
-#include "slang/symbols/ClassSymbols.h"
-#include "slang/symbols/CompilationUnitSymbols.h"
-#include "slang/symbols/InstanceSymbols.h"
-#include "slang/symbols/ParameterSymbols.h"
-#include "slang/symbols/SubroutineSymbols.h"
+#include "slang/ast/Expression.h"
+#include "slang/ast/symbols/ClassSymbols.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/SubroutineSymbols.h"
 #include "slang/syntax/AllSyntax.h"
 
 static constexpr const char* PacketClass = R"(
@@ -60,7 +63,7 @@ TEST_CASE("Class handle expression types") {
 
     auto typeof = [&](const std::string& source) {
         auto tree = SyntaxTree::fromText(string_view(source));
-        BindContext context(scope, LookupLocation::max);
+        ASTContext context(scope, LookupLocation::max);
         return Expression::bind(tree->root().as<ExpressionSyntax>(), context).type->toString();
     };
 
@@ -2635,4 +2638,43 @@ endclass
     Compilation compilation;
     compilation.addSyntaxTree(tree);
     NO_COMPILATION_ERRORS;
+}
+
+TEST_CASE("Constraint in module regress") {
+    auto tree = SyntaxTree::fromText(R"(
+module m;
+    constraint C {}
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::ConstraintNotInClass);
+}
+
+TEST_CASE("Multiple assign to static class members") {
+    auto tree = SyntaxTree::fromText(R"(
+class C;
+    static int foo;
+endclass
+
+function C bar;
+endfunction
+
+module m;
+    C c = new;
+    assign c.foo = 1;
+    assign bar().foo = 1;
+endmodule
+)");
+
+    Compilation compilation;
+    compilation.addSyntaxTree(tree);
+
+    auto& diags = compilation.getAllDiagnostics();
+    REQUIRE(diags.size() == 1);
+    CHECK(diags[0].code == diag::MultipleContAssigns);
 }

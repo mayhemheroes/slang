@@ -2,7 +2,8 @@
 // SyntaxNode.cpp
 // Base class and utilities for syntax nodes
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/syntax/SyntaxNode.h"
 
@@ -12,8 +13,9 @@
 namespace {
 
 using namespace slang;
+using namespace slang::syntax;
 
-struct GetChildVisitor {
+struct ConstGetChildVisitor {
     template<typename T>
     ConstTokenOrSyntax visit(const T& node, size_t index) {
         return node.getChild(index);
@@ -22,22 +24,24 @@ struct GetChildVisitor {
     ConstTokenOrSyntax visitInvalid(const SyntaxNode&, size_t) { return nullptr; }
 };
 
+struct GetChildVisitor {
+    template<typename T>
+    TokenOrSyntax visit(T& node, size_t index) {
+        return node.getChild(index);
+    }
+
+    TokenOrSyntax visitInvalid(SyntaxNode&, size_t) { return nullptr; }
+};
+
 } // namespace
 
-namespace slang {
-
-ConstTokenOrSyntax::ConstTokenOrSyntax(TokenOrSyntax tos) {
-    if (tos.isNode())
-        *this = tos.node();
-    else
-        *this = tos.token();
-}
+namespace slang::syntax {
 
 std::string SyntaxNode::toString() const {
     return SyntaxPrinter().print(*this).str();
 }
 
-Token SyntaxNode::getFirstToken() const {
+parsing::Token SyntaxNode::getFirstToken() const {
     size_t childCount = getChildCount();
     for (size_t i = 0; i < childCount; i++) {
         auto child = getChild(i);
@@ -54,7 +58,7 @@ Token SyntaxNode::getFirstToken() const {
     return Token();
 }
 
-Token SyntaxNode::getLastToken() const {
+parsing::Token SyntaxNode::getLastToken() const {
     size_t childCount = getChildCount();
     for (ptrdiff_t i = ptrdiff_t(childCount) - 1; i >= 0; i--) {
         auto child = getChild(size_t(i));
@@ -78,6 +82,11 @@ SourceRange SyntaxNode::sourceRange() const {
 }
 
 ConstTokenOrSyntax SyntaxNode::getChild(size_t index) const {
+    ConstGetChildVisitor visitor;
+    return visit(visitor, index);
+}
+
+TokenOrSyntax SyntaxNode::getChild(size_t index) {
     GetChildVisitor visitor;
     return visit(visitor, index);
 }
@@ -89,11 +98,47 @@ const SyntaxNode* SyntaxNode::childNode(size_t index) const {
     return child.node();
 }
 
-Token SyntaxNode::childToken(size_t index) const {
+SyntaxNode* SyntaxNode::childNode(size_t index) {
+    auto child = getChild(index);
+    if (child.isToken())
+        return nullptr;
+    return child.node();
+}
+
+parsing::Token SyntaxNode::childToken(size_t index) const {
     auto child = getChild(index);
     if (!child.isToken())
         return Token();
     return child.token();
+}
+
+bool SyntaxNode::isEquivalentTo(const SyntaxNode& other) const {
+    size_t childCount = getChildCount();
+    if (kind != other.kind || childCount != other.getChildCount())
+        return false;
+
+    for (size_t i = 0; i < childCount; i++) {
+        auto ln = childNode(i);
+        auto rn = other.childNode(i);
+        if (bool(ln) != bool(rn))
+            return false;
+
+        if (ln) {
+            if (!ln->isEquivalentTo(*rn))
+                return false;
+        }
+        else {
+            Token lt = childToken(i);
+            Token rt = other.childToken(i);
+
+            if (!lt)
+                return !rt;
+
+            if (lt.kind != rt.kind || lt.valueText() != rt.valueText())
+                return false;
+        }
+    }
+    return true;
 }
 
 bool SyntaxListBase::isKind(SyntaxKind kind) {
@@ -107,4 +152,4 @@ bool SyntaxListBase::isKind(SyntaxKind kind) {
     }
 }
 
-} // namespace slang
+} // namespace slang::syntax

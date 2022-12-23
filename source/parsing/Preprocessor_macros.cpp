@@ -2,7 +2,8 @@
 // Preprocessor_macros.cpp
 // Macro-related preprocessor support
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/diagnostics/LexerDiags.h"
 #include "slang/diagnostics/PreprocessorDiags.h"
@@ -12,7 +13,9 @@
 #include "slang/text/SourceManager.h"
 #include "slang/util/String.h"
 
-namespace slang {
+namespace slang::parsing {
+
+using namespace syntax;
 
 using LF = LexerFacts;
 
@@ -40,29 +43,41 @@ void Preprocessor::createBuiltInMacro(string_view name, int value, string_view v
     Token directive(alloc, TokenKind::Directive, {}, valueStr, NL, SyntaxKind::DefineDirective);
     Token nameTok(alloc, TokenKind::Identifier, {}, name, NL);
 
-    SmallVectorSized<Token, 2> body;
-    body.append(Token(alloc, TokenKind::IntegerLiteral, {}, valueStr, NL,
-                      SVInt(32, uint64_t(value), true)));
+    SmallVector<Token> body;
+    body.push_back(Token(alloc, TokenKind::IntegerLiteral, {}, valueStr, NL,
+                         SVInt(32, uint64_t(value), true)));
 
     MacroDef def;
-    def.syntax =
-        alloc.emplace<DefineDirectiveSyntax>(directive, nameTok, nullptr, body.copy(alloc));
+    def.syntax = alloc.emplace<DefineDirectiveSyntax>(directive, nameTok, nullptr,
+                                                      body.copy(alloc));
     def.builtIn = true;
     macros[name] = def;
 
 #undef NL
 }
 
-MacroActualArgumentListSyntax* Preprocessor::handleTopLevelMacro(Token directive) {
+std::pair<MacroActualArgumentListSyntax*, Trivia> Preprocessor::handleTopLevelMacro(
+    Token directive) {
     auto macro = findMacro(directive);
     if (!macro.valid()) {
+        if (options.ignoreDirectives.find(directive.valueText().substr(1)) !=
+            options.ignoreDirectives.end()) {
+            SmallVector<Token, 4> ignoreTokens;
+            while (peekSameLine() && peek().kind != TokenKind::EndOfFile)
+                ignoreTokens.push_back(consume());
+
+            if (ignoreTokens.empty())
+                return {nullptr, Trivia()};
+            else
+                return {nullptr, Trivia(TriviaKind::SkippedTokens, ignoreTokens.copy(alloc))};
+        }
         addDiag(diag::UnknownDirective, directive.location()) << directive.valueText();
 
         // If we see a parenthesis next, let's assume they tried to invoke a function-like macro
         // and skip over the tokens.
         if (peek(TokenKind::OpenParenthesis))
-            return MacroParser(*this).parseActualArgumentList(directive);
-        return nullptr;
+            return {MacroParser(*this).parseActualArgumentList(directive), Trivia()};
+        return {nullptr, Trivia()};
     }
 
     // if this assert fires, we failed to fully expand nested macros at a previous point
@@ -73,21 +88,21 @@ MacroActualArgumentListSyntax* Preprocessor::handleTopLevelMacro(Token directive
     if (macro.needsArgs()) {
         actualArgs = MacroParser(*this).parseActualArgumentList(directive);
         if (!actualArgs)
-            return nullptr;
+            return {nullptr, Trivia()};
     }
 
     // Expand out the macro
-    SmallVectorSized<Token, 32> buffer;
-    MacroExpansion expansion{ sourceManager, alloc, buffer, directive, true };
+    SmallVector<Token, 32> buffer;
+    MacroExpansion expansion{sourceManager, alloc, buffer, directive, true};
     if (!expandMacro(macro, expansion, actualArgs))
-        return actualArgs;
+        return {actualArgs, Trivia()};
 
     // The macro is now expanded out into tokens, but some of those tokens might
     // be more macros that need to be expanded, or special characters that
     // perform stringification or concatenation of tokens. It's possible that
     // after concatentation is performed we will have formed new valid macro
     // names that need to be expanded, which is why we loop here.
-    SmallSet<DefineDirectiveSyntax*, 8> alreadyExpanded;
+    SmallSet<const DefineDirectiveSyntax*, 8> alreadyExpanded;
     if (!macro.isIntrinsic())
         alreadyExpanded.insert(macro.syntax);
 
@@ -99,7 +114,7 @@ MacroActualArgumentListSyntax* Preprocessor::handleTopLevelMacro(Token directive
         // pass. This ensures that we don't miss expanding a constructed macro.
         const Token* ptr = tokens.data();
         if (!expandReplacementList(tokens, alreadyExpanded))
-            return actualArgs;
+            return {actualArgs, Trivia()};
 
         // Now that all macros have been expanded, handle token concatenation and stringification.
         expandedTokens.clear();
@@ -114,13 +129,13 @@ MacroActualArgumentListSyntax* Preprocessor::handleTopLevelMacro(Token directive
     if (!expandedTokens.empty())
         currentMacroToken = expandedTokens.begin();
 
-    return actualArgs;
+    return {actualArgs, Trivia()};
 }
 
-bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVector<Token>& dest) {
-    SmallVectorSized<Trivia, 16> emptyArgTrivia;
-    SmallVectorSized<Token, 16> stringifyBuffer;
-    SmallVectorSized<Token, 16> commentBuffer;
+bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVectorBase<Token>& dest) {
+    SmallVector<Trivia, 8> emptyArgTrivia;
+    SmallVector<Token, 8> stringifyBuffer;
+    SmallVector<Token, 8> commentBuffer;
     Token stringify;
     Token syntheticComment;
     bool anyNewMacros = false;
@@ -158,7 +173,7 @@ bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVector<Token>& d
 
                     // We're ignoring this token, but don't lose its trivia or our
                     // spacing can get messed up.
-                    emptyArgTrivia.appendRange(token.trivia());
+                    emptyArgTrivia.append(token.trivia());
                 }
                 else if (stringify) {
                     // If this is right after the opening quote or right before the closing quote,
@@ -166,10 +181,10 @@ bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVector<Token>& d
                     if (stringifyBuffer.empty() || tokens[i + 1].kind == TokenKind::MacroQuote)
                         addDiag(diag::IgnoredMacroPaste, token.location());
                     else {
-                        newToken =
-                            Lexer::concatenateTokens(alloc, stringifyBuffer.back(), tokens[i + 1]);
+                        newToken = Lexer::concatenateTokens(alloc, stringifyBuffer.back(),
+                                                            tokens[i + 1]);
                         if (newToken) {
-                            stringifyBuffer.pop();
+                            stringifyBuffer.pop_back();
                             ++i;
                         }
                     }
@@ -179,11 +194,11 @@ bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVector<Token>& d
                     // since this is just going to become a comment anyway.
                     if (commentBuffer.back().kind == TokenKind::Star &&
                         tokens[i + 1].kind == TokenKind::Slash) {
-                        commentBuffer.append(tokens[i + 1]);
+                        commentBuffer.push_back(tokens[i + 1]);
                         i++;
 
-                        emptyArgTrivia.appendRange(syntheticComment.trivia());
-                        emptyArgTrivia.append(
+                        emptyArgTrivia.append(syntheticComment.trivia());
+                        emptyArgTrivia.push_back(
                             Lexer::commentify(alloc, commentBuffer.begin(), commentBuffer.end()));
                         syntheticComment = Token();
                     }
@@ -199,16 +214,16 @@ bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVector<Token>& d
                     if (left.kind == TokenKind::Slash && right.kind == TokenKind::Star) {
                         commentBuffer.clear();
                         syntheticComment = left;
-                        dest.pop();
+                        dest.pop_back();
                         ++i;
 
-                        commentBuffer.append(left.withTrivia(alloc, {}));
+                        commentBuffer.push_back(left.withTrivia(alloc, {}));
                         newToken = right;
                     }
                     else {
                         newToken = Lexer::concatenateTokens(alloc, dest.back(), tokens[i + 1]);
                         if (newToken) {
-                            dest.pop();
+                            dest.pop_back();
                             ++i;
 
                             nextDidConcat = true;
@@ -225,7 +240,7 @@ bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVector<Token>& d
                 if (didConcat && token.trivia().empty() && emptyArgTrivia.empty()) {
                     newToken = Lexer::concatenateTokens(alloc, dest.back(), token);
                     if (newToken) {
-                        dest.pop();
+                        dest.pop_back();
                         nextDidConcat = true;
                         break;
                     }
@@ -245,21 +260,21 @@ bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVector<Token>& d
         // we find. Note that this can be left over at the end of applying ops; that's fine,
         // nothing is relying on observing this after the end of the macro's tokens.
         if (newToken.kind == TokenKind::EmptyMacroArgument) {
-            emptyArgTrivia.appendRange(newToken.trivia());
+            emptyArgTrivia.append(newToken.trivia());
             continue;
         }
 
         if (!emptyArgTrivia.empty()) {
-            emptyArgTrivia.appendRange(newToken.trivia());
+            emptyArgTrivia.append(newToken.trivia());
             newToken = newToken.withTrivia(alloc, emptyArgTrivia.copy(alloc));
             emptyArgTrivia.clear();
         }
 
         if (!stringify) {
             if (syntheticComment)
-                commentBuffer.append(newToken);
+                commentBuffer.push_back(newToken);
             else
-                dest.append(newToken);
+                dest.push_back(newToken);
             continue;
         }
 
@@ -273,15 +288,15 @@ bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVector<Token>& d
                 // Split the token, finish the stringification.
                 Token split(alloc, TokenKind::Identifier, newToken.trivia(),
                             newToken.rawText().substr(0, offset), newToken.location());
-                stringifyBuffer.append(split);
+                stringifyBuffer.push_back(split);
 
-                dest.append(Lexer::stringify(alloc, stringify.location(), stringify.trivia(),
-                                             stringifyBuffer.begin(), stringifyBuffer.end()));
+                dest.push_back(Lexer::stringify(alloc, stringify.location(), stringify.trivia(),
+                                                stringifyBuffer.begin(), stringifyBuffer.end()));
                 stringify = Token();
 
                 // Now we have the unfortunate task of re-lexing the remaining stuff after the split
                 // and then appending those tokens to the destination as well.
-                SmallVectorSized<Token, 8> splits;
+                SmallVector<Token, 8> splits;
                 Lexer::splitTokens(alloc, diagnostics, sourceManager, newToken, offset + 2,
                                    getCurrentKeywordVersion(), splits);
                 anyNewMacros |= applyMacroOps(splits, dest);
@@ -289,7 +304,7 @@ bool Preprocessor::applyMacroOps(span<Token const> tokens, SmallVector<Token>& d
             }
         }
 
-        stringifyBuffer.append(newToken);
+        stringifyBuffer.push_back(newToken);
     }
 
     if (stringify)
@@ -306,7 +321,7 @@ bool Preprocessor::expandMacro(MacroDef macro, MacroExpansion& expansion,
         return expandIntrinsic(macro.intrinsic, expansion);
     }
 
-    DefineDirectiveSyntax* directive = macro.syntax;
+    const DefineDirectiveSyntax* directive = macro.syntax;
     ASSERT(directive);
 
     // ignore empty macro
@@ -319,8 +334,8 @@ bool Preprocessor::expandMacro(MacroDef macro, MacroExpansion& expansion,
     if (!directive->formalArguments) {
         // each macro expansion gets its own location entry
         SourceLocation start = body[0].location();
-        SourceLocation expansionLoc =
-            sourceManager.createExpansionLoc(start, expansion.getRange(), macroName);
+        SourceLocation expansionLoc = sourceManager.createExpansionLoc(start, expansion.getRange(),
+                                                                       macroName);
 
         // simple macro; just take body tokens
         for (auto token : body)
@@ -374,8 +389,8 @@ bool Preprocessor::expandMacro(MacroDef macro, MacroExpansion& expansion,
                                endOfArgs.location() + endOfArgs.rawText().length());
 
     SourceLocation start = body[0].location();
-    SourceLocation expansionLoc =
-        sourceManager.createExpansionLoc(start, expansionRange, macroName);
+    SourceLocation expansionLoc = sourceManager.createExpansionLoc(start, expansionRange,
+                                                                   macroName);
 
     auto append = [&](Token token) {
         expansion.append(token, expansionLoc, start, expansionRange);
@@ -420,7 +435,7 @@ bool Preprocessor::expandMacro(MacroDef macro, MacroExpansion& expansion,
         // a usage of a macro in a replacement list is valid or an illegal recursion.
         if (!it->second.isExpanded) {
             span<const Token> argTokens = it->second;
-            SmallSet<DefineDirectiveSyntax*, 8> alreadyExpanded;
+            SmallSet<const DefineDirectiveSyntax*, 8> alreadyExpanded;
             if (!expandReplacementList(argTokens, alreadyExpanded))
                 return false;
 
@@ -505,7 +520,7 @@ bool Preprocessor::expandMacro(MacroDef macro, MacroExpansion& expansion,
                 if (!handleToken(first))
                     return false;
 
-                SmallVectorSized<Token, 8> splits;
+                SmallVector<Token, 8> splits;
                 Lexer::splitTokens(alloc, diagnostics, sourceManager, token, index,
                                    getCurrentKeywordVersion(), splits);
 
@@ -517,8 +532,8 @@ bool Preprocessor::expandMacro(MacroDef macro, MacroExpansion& expansion,
                 // Add an empty argument in here so we can make sure a space ends
                 // the escaped identifier once it gets concatenated again.
                 if (!splits.empty()) {
-                    SmallVectorSized<Trivia, 2> triviaBuf;
-                    triviaBuf.emplace(TriviaKind::Whitespace, " "sv);
+                    SmallVector<Trivia> triviaBuf;
+                    triviaBuf.emplace_back(TriviaKind::Whitespace, " "sv);
 
                     auto loc = splits.back().location() + splits.back().rawText().length();
                     Token empty(alloc, TokenKind::EmptyMacroArgument, triviaBuf.copy(alloc), ""sv,
@@ -540,7 +555,7 @@ bool Preprocessor::expandMacro(MacroDef macro, MacroExpansion& expansion,
 }
 
 SourceRange Preprocessor::MacroExpansion::getRange() const {
-    return { usageSite.location(), usageSite.location() + usageSite.rawText().length() };
+    return {usageSite.location(), usageSite.location() + usageSite.rawText().length()};
 }
 
 SourceLocation Preprocessor::MacroExpansion::adjustLoc(Token token, SourceLocation& macroLoc,
@@ -576,22 +591,23 @@ void Preprocessor::MacroExpansion::append(Token token, SourceLocation location,
 
     // Line continuations get stripped out when we expand macros and become newline trivia instead.
     if (token.kind == TokenKind::LineContinuation && !allowLineContinuation) {
-        SmallVectorSized<Trivia, 8> newTrivia;
-        newTrivia.appendRange(token.trivia());
-        newTrivia.append(Trivia(TriviaKind::EndOfLine, token.rawText().substr(1)));
+        SmallVector<Trivia, 8> newTrivia;
+        newTrivia.append(token.trivia());
+        newTrivia.push_back(Trivia(TriviaKind::EndOfLine, token.rawText().substr(1)));
 
-        dest.append(
+        dest.push_back(
             Token(alloc, TokenKind::EmptyMacroArgument, newTrivia.copy(alloc), "", location));
     }
     else {
-        dest.append(token.withLocation(alloc, location));
+        dest.push_back(token.withLocation(alloc, location));
     }
 }
 
-bool Preprocessor::expandReplacementList(span<Token const>& tokens,
-                                         SmallSet<DefineDirectiveSyntax*, 8>& alreadyExpanded) {
-    SmallVectorSized<Token, 64> outBuffer;
-    SmallVectorSized<Token, 64> expansionBuffer;
+bool Preprocessor::expandReplacementList(
+    span<Token const>& tokens, SmallSet<const DefineDirectiveSyntax*, 8>& alreadyExpanded) {
+
+    SmallVector<Token, 16> outBuffer;
+    SmallVector<Token, 16> expansionBuffer;
 
     bool expandedSomething = false;
     MacroParser parser(*this);
@@ -601,7 +617,7 @@ bool Preprocessor::expandReplacementList(span<Token const>& tokens,
     Token token;
     while ((token = parser.next())) {
         if (token.kind != TokenKind::Directive || token.directiveKind() != SyntaxKind::MacroUsage) {
-            outBuffer.append(token);
+            outBuffer.push_back(token);
             continue;
         }
 
@@ -610,7 +626,7 @@ bool Preprocessor::expandReplacementList(span<Token const>& tokens,
         if (!macro.valid()) {
             // If we couldn't find the macro, just keep trucking.
             // It's possible that a future expansion will make this valid.
-            outBuffer.append(token);
+            outBuffer.push_back(token);
             continue;
         }
 
@@ -628,7 +644,7 @@ bool Preprocessor::expandReplacementList(span<Token const>& tokens,
         }
 
         expansionBuffer.clear();
-        MacroExpansion expansion{ sourceManager, alloc, expansionBuffer, token, false };
+        MacroExpansion expansion{sourceManager, alloc, expansionBuffer, token, false};
         if (!expandMacro(macro, expansion, actualArgs))
             return false;
 
@@ -640,7 +656,7 @@ bool Preprocessor::expandReplacementList(span<Token const>& tokens,
             return false;
 
         alreadyExpanded.erase(macro.syntax);
-        outBuffer.appendRange(expanded);
+        outBuffer.append(expanded);
         expandedSomething = true;
     }
 
@@ -652,11 +668,13 @@ bool Preprocessor::expandReplacementList(span<Token const>& tokens,
 
 bool Preprocessor::expandIntrinsic(MacroIntrinsic intrinsic, MacroExpansion& expansion) {
     auto loc = expansion.getRange().start();
-    SmallVectorSized<char, 64> text;
+    SmallVector<char> text;
     switch (intrinsic) {
         case MacroIntrinsic::File: {
             string_view fileName = sourceManager.getFileName(loc);
-            text.appendRange(fileName);
+            text.push_back('"');
+            text.append(fileName);
+            text.push_back('"');
 
             string_view rawText = toStringView(text.copy(alloc));
             Token token(alloc, TokenKind::StringLiteral, {}, rawText, loc, fileName);
@@ -673,7 +691,7 @@ bool Preprocessor::expandIntrinsic(MacroIntrinsic intrinsic, MacroExpansion& exp
             break;
         }
         case MacroIntrinsic::None:
-            THROW_UNREACHABLE;
+            ASSUME_UNREACHABLE;
     }
 
     return true;
@@ -686,7 +704,7 @@ bool Preprocessor::MacroDef::needsArgs() const {
 MacroFormalArgumentListSyntax* Preprocessor::MacroParser::parseFormalArgumentList() {
     // parse all formal arguments
     auto openParen = consume();
-    SmallVectorSized<TokenOrSyntax, 16> arguments;
+    SmallVector<TokenOrSyntax, 8> arguments;
     parseArgumentList(arguments, [this]() { return parseFormalArgument(); });
 
     return pp.alloc.emplace<MacroFormalArgumentListSyntax>(openParen, arguments.copy(pp.alloc),
@@ -701,7 +719,7 @@ MacroActualArgumentListSyntax* Preprocessor::MacroParser::parseActualArgumentLis
     }
 
     auto openParen = consume();
-    SmallVectorSized<TokenOrSyntax, 16> arguments;
+    SmallVector<TokenOrSyntax, 8> arguments;
     parseArgumentList(arguments, [this]() { return parseActualArgument(); });
 
     auto closeParen = expect(TokenKind::CloseParenthesis);
@@ -710,13 +728,13 @@ MacroActualArgumentListSyntax* Preprocessor::MacroParser::parseActualArgumentLis
 }
 
 template<typename TFunc>
-void Preprocessor::MacroParser::parseArgumentList(SmallVector<TokenOrSyntax>& results,
+void Preprocessor::MacroParser::parseArgumentList(SmallVectorBase<TokenOrSyntax>& results,
                                                   TFunc&& parseItem) {
     while (true) {
-        results.append(parseItem());
+        results.push_back(parseItem());
 
         if (peek().kind == TokenKind::Comma)
-            results.append(consume());
+            results.push_back(consume());
         else {
             // Just break out of the loop. Our caller will expect
             // that there is a closing parenthesis here.
@@ -750,8 +768,8 @@ span<Token> Preprocessor::MacroParser::parseTokenList(bool allowNewlines) {
     // comma and right parenthesis only end the default token list if they are
     // not inside a nested pair of (), [], or {}
     // otherwise, keep swallowing tokens as part of the default
-    SmallVectorSized<Token, 64> tokens;
-    SmallVectorSized<TokenKind, 16> delimPairStack;
+    SmallVector<Token, 16> tokens;
+    SmallVector<TokenKind> delimPairStack;
     while (true) {
         auto kind = peek().kind;
         if (kind == TokenKind::EndOfFile || (!allowNewlines && !peek().isOnSameLine())) {
@@ -766,14 +784,15 @@ span<Token> Preprocessor::MacroParser::parseTokenList(bool allowNewlines) {
             if ((kind == TokenKind::Comma || kind == TokenKind::CloseParenthesis))
                 break;
         }
-        else if (delimPairStack.back() == kind)
-            delimPairStack.pop();
+        else if (delimPairStack.back() == kind) {
+            delimPairStack.pop_back();
+        }
 
-        tokens.append(consume());
+        tokens.push_back(consume());
 
         TokenKind closeKind = SyntaxFacts::getDelimCloseKind(kind);
         if (closeKind != TokenKind::Unknown)
-            delimPairStack.append(closeKind);
+            delimPairStack.push_back(closeKind);
     }
     return tokens.copy(pp.alloc);
 }
@@ -872,4 +891,4 @@ bool Preprocessor::isSameMacro(const DefineDirectiveSyntax& left,
     return isSameTokenList(left.body, right.body);
 }
 
-} // namespace slang
+} // namespace slang::parsing

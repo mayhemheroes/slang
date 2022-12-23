@@ -2,9 +2,12 @@
 // DiagnosticEngine.cpp
 // Primary interface for managing diagnostic reporting
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/diagnostics/DiagnosticEngine.h"
+
+#include <fmt/args.h>
 
 #include "slang/diagnostics/DiagArgFormatter.h"
 #include "slang/diagnostics/DiagnosticClient.h"
@@ -12,6 +15,7 @@
 #include "slang/diagnostics/TextDiagnosticClient.h"
 #include "slang/text/SourceManager.h"
 #include "slang/util/StackContainer.h"
+#include "slang/util/String.h"
 
 namespace slang {
 
@@ -133,7 +137,7 @@ static bool checkMacroArgRanges(const DiagnosticEngine& engine, SourceLocation l
 
     loc = sm.getExpansionLoc(loc);
 
-    SmallVectorSized<SourceRange, 8> mappedRanges;
+    SmallVector<SourceRange, 8> mappedRanges;
     engine.mapSourceRanges(loc, ranges, mappedRanges, false);
 
     if (ranges.size() > mappedRanges.size())
@@ -181,7 +185,7 @@ void DiagnosticEngine::issue(const Diagnostic& diagnostic) {
 
 void DiagnosticEngine::issueImpl(const Diagnostic& diagnostic, DiagnosticSeverity severity) {
     // Walk out until we find a location for this diagnostic that isn't inside a macro.
-    SmallVectorSized<SourceLocation, 8> expansionLocs;
+    SmallVector<SourceLocation, 8> expansionLocs;
     SourceLocation loc = diagnostic.location;
     size_t ignoreUntil = 0;
     bool showIncludeStack = false;
@@ -190,11 +194,11 @@ void DiagnosticEngine::issueImpl(const Diagnostic& diagnostic, DiagnosticSeverit
         while (sourceManager.isMacroLoc(loc)) {
             SourceLocation prevLoc = loc;
             if (sourceManager.isMacroArgLoc(loc)) {
-                expansionLocs.append(sourceManager.getExpansionLoc(loc));
+                expansionLocs.push_back(sourceManager.getExpansionLoc(loc));
                 loc = sourceManager.getOriginalLoc(loc);
             }
             else {
-                expansionLocs.append(loc);
+                expansionLocs.push_back(loc);
                 loc = sourceManager.getExpansionLoc(loc);
             }
 
@@ -232,6 +236,9 @@ std::string DiagnosticEngine::formatMessage(const Diagnostic& diag) const {
         return std::string(getMessage(diag.code));
 
     // Let each formatter have a look at the diagnostic before we begin.
+    if (formatters.empty())
+        formatters = defaultFormatters;
+
     for (auto& [key, formatter] : formatters)
         formatter->startMessage(diag);
 
@@ -245,7 +252,7 @@ std::string DiagnosticEngine::formatMessage(const Diagnostic& diag) const {
                 using T = std::decay_t<decltype(t)>;
                 if constexpr (std::is_same_v<std::any, T>) {
                     if (auto it = formatters.find(t.type()); it != formatters.end())
-                        it->second->format(args, t);
+                        args.push_back(it->second->format(t));
                     else
                         throw std::runtime_error("No diagnostic formatter for type");
                 }
@@ -269,10 +276,10 @@ std::string DiagnosticEngine::formatMessage(const Diagnostic& diag) const {
 
 // Walks up a chain of macro argument expansions and collects their buffer IDs.
 static void getMacroArgExpansions(const SourceManager& sm, SourceLocation loc, bool isStart,
-                                  SmallVector<BufferID>& results) {
+                                  SmallVectorBase<BufferID>& results) {
     while (sm.isMacroLoc(loc)) {
         if (sm.isMacroArgLoc(loc)) {
-            results.append(loc.buffer());
+            results.push_back(loc.buffer());
             loc = sm.getOriginalLoc(loc);
         }
         else {
@@ -285,8 +292,8 @@ static void getMacroArgExpansions(const SourceManager& sm, SourceLocation loc, b
 // Finds all macro argument expansions that are common in both start and end.
 static void getCommonMacroArgExpansions(const SourceManager& sm, SourceLocation start,
                                         SourceLocation end, std::vector<BufferID>& results) {
-    SmallVectorSized<BufferID, 8> startArgExpansions;
-    SmallVectorSized<BufferID, 8> endArgExpansions;
+    SmallVector<BufferID> startArgExpansions;
+    SmallVector<BufferID> endArgExpansions;
     getMacroArgExpansions(sm, start, true, startArgExpansions);
     getMacroArgExpansions(sm, end, false, endArgExpansions);
     std::stable_sort(startArgExpansions.begin(), startArgExpansions.end());
@@ -338,7 +345,7 @@ static SourceLocation getMatchingMacroLoc(const SourceManager& sm, SourceLocatio
 }
 
 void DiagnosticEngine::mapSourceRanges(SourceLocation loc, span<const SourceRange> ranges,
-                                       SmallVector<SourceRange>& mapped,
+                                       SmallVectorBase<SourceRange>& mapped,
                                        bool mapOriginalLocations) const {
     const SourceManager& sm = sourceManager;
 
@@ -381,7 +388,7 @@ void DiagnosticEngine::mapSourceRanges(SourceLocation loc, span<const SourceRang
             start = sm.getFullyOriginalLoc(start);
             end = sm.getFullyOriginalLoc(end);
         }
-        mapped.emplace(start, end);
+        mapped.emplace_back(start, end);
     }
 }
 
@@ -397,11 +404,6 @@ std::string DiagnosticEngine::reportAll(const SourceManager& sourceManager,
 
     return client->getString();
 }
-
-// TODO: remove once we have C++20
-static bool startsWith(string_view str, string_view prefix) {
-    return str.size() >= prefix.size() && str.compare(0, prefix.size(), prefix) == 0;
-};
 
 void DiagnosticEngine::setDefaultWarnings() {
     setIgnoreAllWarnings(true);
@@ -436,13 +438,17 @@ Diagnostics DiagnosticEngine::setWarningOptions(span<const std::string> options)
             setIgnoreAllWarnings(true);
         }
         else if (arg == "error") {
+            for (auto it = severityTable.begin(); it != severityTable.end(); it++) {
+                if (it->second == DiagnosticSeverity::Warning)
+                    it->second = DiagnosticSeverity::Error;
+            }
             setWarningsAsErrors(true);
         }
         else if (startsWith(arg, "error=")) {
             findAndSet(arg.substr(6), DiagnosticSeverity::Error, "-Werror=");
         }
         else if (startsWith(arg, "no-error=")) {
-            findAndSet(arg.substr(9), DiagnosticSeverity::Error, "-Wno-error=");
+            findAndSet(arg.substr(9), DiagnosticSeverity::Warning, "-Wno-error=");
         }
         else if (startsWith(arg, "no-")) {
             findAndSet(arg.substr(3), DiagnosticSeverity::Ignored, "-Wno-");
@@ -455,68 +461,87 @@ Diagnostics DiagnosticEngine::setWarningOptions(span<const std::string> options)
     return diags;
 }
 
-Diagnostics DiagnosticEngine::setMappingsFromPragmas() {
-    Diagnostics diags;
+template<typename TDirective>
+void DiagnosticEngine::setMappingsFromPragmasImpl(BufferID buffer,
+                                                  span<const TDirective> directives,
+                                                  Diagnostics& diags) {
 
-    sourceManager.visitDiagnosticDirectives([&](BufferID buffer, auto& directives) {
-        // Store the state of diagnostics each time the user pushes,
-        // and restore the state when they pop.
-        std::vector<flat_hash_map<DiagCode, DiagnosticSeverity>> mappingStack;
-        mappingStack.emplace_back();
+    // Store the state of diagnostics each time the user pushes,
+    // and restore the state when they pop.
+    std::vector<flat_hash_map<DiagCode, DiagnosticSeverity>> mappingStack;
+    mappingStack.emplace_back();
 
-        auto noteDiag = [&](DiagCode code, auto& directive) {
-            diagMappings[code][buffer].emplace_back(directive.offset, directive.severity);
-            mappingStack.back()[code] = directive.severity;
-        };
+    auto noteDiag = [&](DiagCode code, auto& directive) {
+        diagMappings[code][buffer].emplace_back(directive.offset, directive.severity);
+        mappingStack.back()[code] = directive.severity;
+    };
 
-        for (const SourceManager::DiagnosticDirectiveInfo& directive : directives) {
-            auto name = directive.name;
-            if (name == "__push__") {
-                mappingStack.emplace_back(mappingStack.back());
+    for (const SourceManager::DiagnosticDirectiveInfo& directive : directives) {
+        auto name = directive.name;
+        if (name == "__push__") {
+            mappingStack.emplace_back(mappingStack.back());
+        }
+        else if (name == "__pop__") {
+            // If the stack size is 1, push was never called, so just ignore.
+            if (mappingStack.size() <= 1)
+                continue;
+
+            // Any directives that were set revert to their previous values.
+            // If there is no previous value, they go back to the default (unset).
+            auto& prev = mappingStack[mappingStack.size() - 2];
+            for (auto [code, _] : mappingStack.back()) {
+                auto& mappings = diagMappings[code][buffer];
+                if (auto it = prev.find(code); it != prev.end())
+                    mappings.emplace_back(directive.offset, it->second);
+                else
+                    mappings.emplace_back(directive.offset, std::nullopt);
             }
-            else if (name == "__pop__") {
-                // If the stack size is 1, push was never called, so just ignore.
-                if (mappingStack.size() <= 1)
-                    continue;
+            mappingStack.pop_back();
+        }
+        else {
+            if (startsWith(name, "-W"sv))
+                name = name.substr(2);
 
-                // Any directives that were set revert to their previous values.
-                // If there is no previous value, they go back to the default (unset).
-                auto& prev = mappingStack[mappingStack.size() - 2];
-                for (auto [code, _] : mappingStack.back()) {
-                    auto& mappings = diagMappings[code][buffer];
-                    if (auto it = prev.find(code); it != prev.end())
-                        mappings.emplace_back(directive.offset, it->second);
-                    else
-                        mappings.emplace_back(directive.offset, std::nullopt);
-                }
-                mappingStack.pop_back();
+            if (auto group = findDiagGroup(name)) {
+                for (auto code : group->getDiags())
+                    noteDiag(code, directive);
+            }
+            else if (auto codes = findFromOptionName(name); !codes.empty()) {
+                for (auto code : codes)
+                    noteDiag(code, directive);
             }
             else {
-                if (startsWith(name, "-W"sv))
-                    name = name.substr(2);
-
-                if (auto group = findDiagGroup(name)) {
-                    for (auto code : group->getDiags())
-                        noteDiag(code, directive);
-                }
-                else if (auto codes = findFromOptionName(name); !codes.empty()) {
-                    for (auto code : codes)
-                        noteDiag(code, directive);
-                }
-                else {
-                    auto& diag = diags.add(diag::UnknownWarningOption,
-                                           SourceLocation(buffer, directive.offset));
-                    diag << name;
-                }
+                auto& diag = diags.add(diag::UnknownWarningOption,
+                                       SourceLocation(buffer, directive.offset));
+                diag << name;
             }
         }
+    }
+}
+
+Diagnostics DiagnosticEngine::setMappingsFromPragmas() {
+    Diagnostics diags;
+    sourceManager.visitDiagnosticDirectives([&](BufferID buffer, auto& directives) {
+        setMappingsFromPragmasImpl<SourceManager::DiagnosticDirectiveInfo>(buffer, directives,
+                                                                           diags);
     });
 
     return diags;
 }
 
-optional<DiagnosticSeverity> DiagnosticEngine::findMappedSeverity(DiagCode code,
-                                                                  SourceLocation location) const {
+Diagnostics DiagnosticEngine::setMappingsFromPragmas(BufferID buffer) {
+    Diagnostics diags;
+    auto directives = sourceManager.getDiagnosticDirectives(buffer);
+    if (!directives.empty()) {
+        setMappingsFromPragmasImpl<SourceManager::DiagnosticDirectiveInfo>(buffer, directives,
+                                                                           diags);
+    }
+
+    return diags;
+}
+
+std::optional<DiagnosticSeverity> DiagnosticEngine::findMappedSeverity(
+    DiagCode code, SourceLocation location) const {
     auto byCode = diagMappings.find(code);
     if (byCode == diagMappings.end())
         return std::nullopt;
@@ -527,9 +552,10 @@ optional<DiagnosticSeverity> DiagnosticEngine::findMappedSeverity(DiagCode code,
         return std::nullopt;
 
     const std::vector<DiagnosticMapping>& mappings = byBuffer->second;
-    auto byOffset = std::lower_bound(
-        mappings.begin(), mappings.end(), fileLoc.offset(),
-        [](const DiagnosticMapping& mapping, size_t off) { return mapping.offset < off; });
+    auto byOffset = std::lower_bound(mappings.begin(), mappings.end(), fileLoc.offset(),
+                                     [](const DiagnosticMapping& mapping, size_t off) {
+                                         return mapping.offset < off;
+                                     });
 
     if (byOffset == mappings.begin())
         return std::nullopt;

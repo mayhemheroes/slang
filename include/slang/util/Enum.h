@@ -2,7 +2,8 @@
 //! @file Enum.h
 //! @brief Various enum utilities
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -17,17 +18,15 @@
 /// along with a toString() method and an overload of operator<< for formatting.
 #define ENUM(name, elements) ENUM_SIZED(name, int, elements)
 #define ENUM_SIZED(name, underlying, elements)                                                  \
-    enum class name : underlying { elements(UTIL_ENUM_ELEMENT) };                               \
+    enum class SLANG_EXPORT name : underlying { elements(UTIL_ENUM_ELEMENT) };                  \
     inline string_view toString(name e) {                                                       \
-        static const char* strings[] = { elements(UTIL_ENUM_STRING) };                          \
+        static const char* strings[] = {elements(UTIL_ENUM_STRING)};                            \
         return strings[static_cast<std::underlying_type_t<name>>(e)];                           \
     }                                                                                           \
-    inline std::ostream& operator<<(std::ostream& os, name e) {                                 \
-        return os << toString(e);                                                               \
-    }                                                                                           \
+    inline std::ostream& operator<<(std::ostream& os, name e) { return os << toString(e); }     \
     class name##_traits {                                                                       \
         enum e { elements(UTIL_ENUM_ELEMENT) };                                                 \
-        static constexpr auto vals = { elements(UTIL_ENUM_ELEMENT) };                           \
+        static constexpr auto vals = {elements(UTIL_ENUM_ELEMENT)};                             \
         static constexpr auto getValues() {                                                     \
             std::array<name, vals.size()> result{};                                             \
             size_t i = 0;                                                                       \
@@ -44,19 +43,19 @@
 
 #define BITMASK_DETAIL_DEFINE_OPS(value_type)                                                    \
     inline constexpr slang::bitmask<value_type> operator&(value_type l, value_type r) noexcept { \
-        return slang::bitmask<value_type>{ l } & r;                                              \
+        return slang::bitmask<value_type>{l} & r;                                                \
     }                                                                                            \
     inline constexpr slang::bitmask<value_type> operator|(value_type l, value_type r) noexcept { \
-        return slang::bitmask<value_type>{ l } | r;                                              \
+        return slang::bitmask<value_type>{l} | r;                                                \
     }                                                                                            \
     inline constexpr slang::bitmask<value_type> operator^(value_type l, value_type r) noexcept { \
-        return slang::bitmask<value_type>{ l } ^ r;                                              \
+        return slang::bitmask<value_type>{l} ^ r;                                                \
     }                                                                                            \
     inline constexpr slang::bitmask<value_type> operator~(value_type op) noexcept {              \
-        return ~slang::bitmask<value_type>{ op };                                                \
+        return ~slang::bitmask<value_type>{op};                                                  \
     }                                                                                            \
     inline constexpr slang::bitmask<value_type>::underlying_type bits(value_type op) noexcept {  \
-        return slang::bitmask<value_type>{ op }.bits();                                          \
+        return slang::bitmask<value_type>{op}.bits();                                            \
     }
 
 #define BITMASK_DETAIL_DEFINE_MAX_ELEMENT(value_type, max_element)                           \
@@ -88,8 +87,8 @@ using underlying_type_t = typename underlying_type<T>::type;
 
 template<class T, T MaxElement = T::_bitmask_max_element>
 struct mask_from_max_element {
-    static constexpr underlying_type_t<T> max_element_value_ =
-        static_cast<underlying_type_t<T>>(MaxElement);
+    static constexpr underlying_type_t<T> max_element_value_ = static_cast<underlying_type_t<T>>(
+        MaxElement);
 
     static_assert(max_element_value_ >= 0, "Max element is negative");
 
@@ -101,8 +100,9 @@ struct mask_from_max_element {
 
     // `((value - 1) << 1) + 1` is used rather that simpler `(value << 1) - 1`
     // because latter overflows in case if `value` is the highest bit of the underlying type.
-    static constexpr underlying_type_t<T> value =
-        max_element_value_ ? ((max_element_value_ - 1) << 1) + 1 : 0;
+    static constexpr underlying_type_t<T> value = max_element_value_
+                                                      ? ((max_element_value_ - 1) << 1) + 1
+                                                      : 0;
 };
 
 template<class T>
@@ -119,14 +119,14 @@ inline constexpr bitmask_detail::underlying_type_t<T> get_enum_mask(const T&) no
 /// of bitwise-combined flags. Built-in strongly-typed C++ enums are not otherwise
 /// combinable via operators like | and &.
 template<typename T>
-class bitmask {
+class SLANG_EXPORT bitmask {
 public:
     using underlying_type = bitmask_detail::underlying_type_t<T>;
 
     static constexpr underlying_type mask_value = get_enum_mask(static_cast<T>(0));
 
     constexpr bitmask() noexcept = default;
-    constexpr bitmask(T value) noexcept : m_bits{ static_cast<underlying_type>(value) } {}
+    constexpr bitmask(T value) noexcept : m_bits{static_cast<underlying_type>(value)} {}
 
     /// Returns true iff (*this & r) != 0.
     constexpr bool has(const bitmask& r) const noexcept { return (*this & r) != 0; }
@@ -138,19 +138,19 @@ public:
     constexpr explicit operator bool() const noexcept { return bits() ? true : false; }
 
     constexpr bitmask operator~() const noexcept {
-        return bitmask{ std::true_type{}, ~m_bits & mask_value };
+        return bitmask{std::true_type{}, ~m_bits & mask_value};
     }
 
     constexpr bitmask operator&(const bitmask& r) const noexcept {
-        return bitmask{ std::true_type{}, m_bits & r.m_bits };
+        return bitmask{std::true_type{}, m_bits & r.m_bits};
     }
 
     constexpr bitmask operator|(const bitmask& r) const noexcept {
-        return bitmask{ std::true_type{}, m_bits | r.m_bits };
+        return bitmask{std::true_type{}, m_bits | r.m_bits};
     }
 
     constexpr bitmask operator^(const bitmask& r) const noexcept {
-        return bitmask{ std::true_type{}, m_bits ^ r.m_bits };
+        return bitmask{std::true_type{}, m_bits ^ r.m_bits};
     }
 
     bitmask& operator|=(const bitmask& r) noexcept {

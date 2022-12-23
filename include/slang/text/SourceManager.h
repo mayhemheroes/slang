@@ -2,18 +2,17 @@
 //! @file SourceManager.h
 //! @brief Source file management
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
 #include <atomic>
-#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <shared_mutex>
-#include <unordered_map>
 #include <variant>
 #include <vector>
 
@@ -34,7 +33,7 @@ enum class DiagnosticSeverity;
 /// See SourceLocation for more details.
 ///
 /// The methods in this class are thread safe.
-class SourceManager {
+class SLANG_EXPORT SourceManager {
 public:
     SourceManager();
     SourceManager(const SourceManager&) = delete;
@@ -180,6 +179,15 @@ public:
             func(buffer, directives);
     }
 
+    /// Gets the diagnostic directives associated with the given buffer, if any.
+    /// Note that the returned span is not safe to store; the underlying data can
+    /// be mutated by a call to @a addDiagnosticDirective and invalidate the span.
+    span<const DiagnosticDirectiveInfo> getDiagnosticDirectives(BufferID buffer) const;
+
+    /// Returns a list of buffers (files and macros) that have been created in the
+    /// source manager.
+    std::vector<BufferID> getAllBuffers() const;
+
 private:
     // Stores information specified in a `line directive, which alters the
     // line number and file name that we report in diagnostics.
@@ -247,10 +255,10 @@ private:
     mutable std::shared_mutex mut;
 
     // index from BufferID to buffer metadata
-    std::deque<std::variant<FileInfo, ExpansionInfo>> bufferEntries;
+    std::vector<std::variant<FileInfo, ExpansionInfo>> bufferEntries;
 
     // cache for file lookups; this holds on to the actual file data
-    std::unordered_map<std::string, std::unique_ptr<FileData>> lookupCache;
+    flat_hash_map<std::string, std::unique_ptr<FileData>> lookupCache;
 
     // directories for system and user includes
     std::vector<fs::path> systemDirectories;

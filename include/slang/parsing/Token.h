@@ -2,7 +2,8 @@
 //! @file Token.h
 //! @brief Contains the Token class and related helpers
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -15,13 +16,23 @@
 
 namespace slang {
 
-enum class SyntaxKind;
 class Diagnostics;
+
+namespace syntax {
+
 class SyntaxNode;
+enum class SyntaxKind;
+
+} // namespace syntax
+
+} // namespace slang
+
+namespace slang::parsing {
+
 class Token;
 
 /// Various flags for numeric tokens.
-struct NumericTokenFlags {
+struct SLANG_EXPORT NumericTokenFlags {
     uint8_t raw = 0;
 
     LiteralBase base() const { return LiteralBase(raw & 0b11); }
@@ -37,7 +48,7 @@ struct NumericTokenFlags {
 /// The Trivia class holds on to a piece of source text that should otherwise
 /// not turn into a token; for example, a preprocessor directive, a line continuation
 /// character, or a comment.
-class Trivia {
+class SLANG_EXPORT Trivia {
 private:
 #pragma pack(push, 4)
     struct ShortStringView {
@@ -56,7 +67,7 @@ private:
     union {
         ShortStringView rawText;
         ShortTokenSpan tokens;
-        SyntaxNode* syntaxNode;
+        syntax::SyntaxNode* syntaxNode;
         FullLocation* fullLocation;
     };
 #pragma pack(pop)
@@ -74,7 +85,11 @@ public:
     Trivia();
     Trivia(TriviaKind kind, string_view rawText);
     Trivia(TriviaKind kind, span<Token const> tokens);
-    Trivia(TriviaKind kind, SyntaxNode* syntax);
+    Trivia(TriviaKind kind, syntax::SyntaxNode* syntax);
+
+    bool valid() const { return kind != TriviaKind::Unknown; }
+
+    explicit operator bool() const { return valid(); }
 
     /// If the trivia is raw source text, creates a new trivia with the specified location
     /// (instead of implicitly offset from the parent token). If this trivia is for a
@@ -83,11 +98,11 @@ public:
 
     /// Gets the source location of the trivia if one is explicitly known. If not, nullopt
     /// is returned to signify that the location is implicitly relative to the parent token.
-    optional<SourceLocation> getExplicitLocation() const;
+    std::optional<SourceLocation> getExplicitLocation() const;
 
     /// If this trivia is tracking a skipped syntax node or a directive, returns that node.
     /// Otherwise returns nullptr.
-    SyntaxNode* syntax() const;
+    syntax::SyntaxNode* syntax() const;
 
     /// Get the raw text of the trivia, if any.
     string_view getRawText() const;
@@ -95,8 +110,12 @@ public:
     /// If the trivia represents skipped tokens, returns the list of tokens that were
     /// skipped. Otherwise returns an empty span.
     span<Token const> getSkippedTokens() const;
+
+    Trivia clone(BumpAllocator& alloc) const;
 };
+#if !defined(_M_IX86)
 static_assert(sizeof(Trivia) == 16);
+#endif
 
 /// Represents a single lexed token, including leading trivia, original location, token kind,
 /// and any related information derived from the token itself (such as the lexeme).
@@ -104,7 +123,7 @@ static_assert(sizeof(Trivia) == 16);
 /// This class is a lightweight immutable structure designed to be copied around and stored
 /// wherever. The bulk of the token's data is stored in a heap allocated block. Most of the
 /// hot path only cares about the token's kind, so that's given priority.
-class Token {
+class SLANG_EXPORT Token {
 public:
     /// The kind of the token; this is not in the info block because
     /// we almost always want to look at it (perf).
@@ -116,13 +135,13 @@ public:
     Token(BumpAllocator& alloc, TokenKind kind, span<Trivia const> trivia, string_view rawText,
           SourceLocation location, string_view strText);
     Token(BumpAllocator& alloc, TokenKind kind, span<Trivia const> trivia, string_view rawText,
-          SourceLocation location, SyntaxKind directive);
+          SourceLocation location, syntax::SyntaxKind directive);
     Token(BumpAllocator& alloc, TokenKind kind, span<Trivia const> trivia, string_view rawText,
           SourceLocation location, logic_t bit);
     Token(BumpAllocator& alloc, TokenKind kind, span<Trivia const> trivia, string_view rawText,
           SourceLocation location, const SVInt& value);
     Token(BumpAllocator& alloc, TokenKind kind, span<Trivia const> trivia, string_view rawText,
-          SourceLocation location, double value, bool outOfRange, optional<TimeUnit> timeUnit);
+          SourceLocation location, double value, bool outOfRange, std::optional<TimeUnit> timeUnit);
     Token(BumpAllocator& alloc, TokenKind kind, span<Trivia const> trivia, string_view rawText,
           SourceLocation location, LiteralBase base, bool isSigned);
 
@@ -149,7 +168,7 @@ public:
     double realValue() const;
     logic_t bitValue() const;
     NumericTokenFlags numericFlags() const;
-    SyntaxKind directiveKind() const;
+    syntax::SyntaxKind directiveKind() const;
 
     /// Returns true if this token is on the same line as the token before it.
     /// This is detected by examining the leading trivia of this token for newlines.
@@ -167,6 +186,7 @@ public:
     [[nodiscard]] Token withRawText(BumpAllocator& alloc, string_view rawText) const;
     [[nodiscard]] Token clone(BumpAllocator& alloc, span<Trivia const> trivia, string_view rawText,
                               SourceLocation location) const;
+    [[nodiscard]] Token deepClone(BumpAllocator& alloc) const;
 
     static Token createMissing(BumpAllocator& alloc, TokenKind kind, SourceLocation location);
     static Token createExpected(BumpAllocator& alloc, Diagnostics& diagnostics, Token actual,
@@ -194,7 +214,9 @@ private:
     static constexpr int MaxTriviaSmallCount = (1 << 4) - 2;
 };
 
+#if !defined(_M_IX86)
 static_assert(sizeof(Token) == 16);
+#endif
 static_assert(std::is_trivially_copyable_v<Token>);
 
-} // namespace slang
+} // namespace slang::parsing

@@ -1,12 +1,15 @@
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
+
 #include "Test.h"
 
-#include "slang/symbols/BlockSymbols.h"
-#include "slang/symbols/CompilationUnitSymbols.h"
-#include "slang/symbols/InstanceSymbols.h"
-#include "slang/symbols/MemberSymbols.h"
-#include "slang/symbols/ParameterSymbols.h"
-#include "slang/symbols/VariableSymbols.h"
-#include "slang/types/Type.h"
+#include "slang/ast/symbols/BlockSymbols.h"
+#include "slang/ast/symbols/CompilationUnitSymbols.h"
+#include "slang/ast/symbols/InstanceSymbols.h"
+#include "slang/ast/symbols/MemberSymbols.h"
+#include "slang/ast/symbols/ParameterSymbols.h"
+#include "slang/ast/symbols/VariableSymbols.h"
+#include "slang/ast/types/Type.h"
 
 TEST_CASE("For loop statements") {
     auto tree = SyntaxTree::fromText(R"(
@@ -577,7 +580,7 @@ endmodule
     NO_COMPILATION_ERRORS;
 
     auto& foo = compilation.getRoot().lookupName<VariableSymbol>("m.asdf.foo");
-    CHECK(foo.getType().getFixedRange() == ConstantRange{ 4, 2 });
+    CHECK(foo.getType().getFixedRange() == ConstantRange{4, 2});
 }
 
 TEST_CASE("If statement -- unevaluated branches -- valid") {
@@ -629,7 +632,7 @@ endmodule
 
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 2);
-    CHECK(diags[0].code == diag::IndexValueInvalid);
+    CHECK(diags[0].code == diag::IndexOOB);
     CHECK(diags[1].code == diag::NotBooleanConvertible);
 }
 
@@ -856,8 +859,8 @@ endmodule
     auto& diags = compilation.getAllDiagnostics();
     REQUIRE(diags.size() == 4);
     CHECK(diags[0].code == diag::VoidCastFuncCall);
-    CHECK(diags[1].code == diag::BadCastType);
-    CHECK(diags[2].code == diag::VoidNotAllowed);
+    CHECK(diags[1].code == diag::VoidNotAllowed);
+    CHECK(diags[2].code == diag::BadCastType);
     CHECK(diags[3].code == diag::PointlessVoidCast);
 }
 
@@ -1476,7 +1479,7 @@ endmodule
     CHECK(diags[4].code == diag::ExprMustBeIntegral);
     CHECK(diags[5].code == diag::NotAProduction);
     CHECK(diags[6].code == diag::TooFewArguments);
-    CHECK(diags[7].code == diag::IndexValueInvalid);
+    CHECK(diags[7].code == diag::IndexOOB);
     CHECK(diags[8].code == diag::TooFewArguments);
 }
 
@@ -1553,7 +1556,7 @@ endmodule
 
 TEST_CASE("Unrollable for loop drivers") {
     auto tree = SyntaxTree::fromText(R"(
-module m;
+ module m;
     int foo[10];
     initial
         for (int i = 1; i < 10; i += 2) begin : baz
@@ -1587,14 +1590,14 @@ module m;
     always_comb baz[1][1].bar = 4;
     always_comb baz[2][1].foo = 3;
 
-    struct { int foo; int bar; } arr[2147483647];
+    struct { int foo; int bar; } arr[21474836];
     initial begin
         for (int i = 0; i < 2147483647; i++) begin
             arr[i].foo = 1;
         end
     end
     always_comb arr[0].bar = 2;
-endmodule
+ endmodule
 )");
 
     Compilation compilation;

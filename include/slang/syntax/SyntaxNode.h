@@ -2,7 +2,8 @@
 //! @file SyntaxNode.h
 //! @brief Base class and utilities for syntax nodes
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #pragma once
 
@@ -12,20 +13,19 @@
 #include "slang/parsing/Token.h"
 #include "slang/syntax/SyntaxKind.h"
 #include "slang/util/Iterator.h"
+#include "slang/util/PointerIntPair.h"
 #include "slang/util/SmallVector.h"
-#include "slang/util/Util.h"
 
-namespace slang {
+namespace slang::syntax {
 
 class SyntaxNode;
 
-/// A base class template for a sum type representing either a token or a syntax node.
-template<typename TNode>
-struct TokenOrSyntaxBase : public std::variant<Token, TNode> {
-    using Base = std::variant<Token, TNode>;
-    TokenOrSyntaxBase(Token token) : Base(token) {}
-    TokenOrSyntaxBase(TNode node) : Base(node) {}
-    TokenOrSyntaxBase(nullptr_t) : Base(Token()) {}
+/// A token or a constant syntax node.
+struct SLANG_EXPORT ConstTokenOrSyntax : public std::variant<parsing::Token, const SyntaxNode*> {
+    using Base = std::variant<parsing::Token, const SyntaxNode*>;
+    ConstTokenOrSyntax(parsing::Token token) : Base(token) {}
+    ConstTokenOrSyntax(const SyntaxNode* node) : Base(node) {}
+    ConstTokenOrSyntax(nullptr_t) : Base(parsing::Token()) {}
 
     /// @return true if the object is a token.
     bool isToken() const { return this->index() == 0; }
@@ -35,31 +35,33 @@ struct TokenOrSyntaxBase : public std::variant<Token, TNode> {
 
     /// Gets access to the object as a token (throwing an exception
     /// if it's not actually a token).
-    Token token() const { return std::get<0>(*this); }
+    parsing::Token token() const { return std::get<0>(*this); }
 
     /// Gets access to the object as a syntax node (throwing an exception
     /// if it's not actually a syntax node).
-    TNode node() const { return std::get<1>(*this); }
-
-protected:
-    TokenOrSyntaxBase() = default;
+    const SyntaxNode* node() const { return std::get<1>(*this); }
 };
 
 /// A token or a syntax node.
-struct TokenOrSyntax : public TokenOrSyntaxBase<SyntaxNode*> {
-    using TokenOrSyntaxBase::TokenOrSyntaxBase;
-};
+struct SLANG_EXPORT TokenOrSyntax : public ConstTokenOrSyntax {
+    TokenOrSyntax(parsing::Token token) : ConstTokenOrSyntax(token) {}
+    TokenOrSyntax(SyntaxNode* node) : ConstTokenOrSyntax(node) {}
+    TokenOrSyntax(nullptr_t) : ConstTokenOrSyntax(parsing::Token()) {}
 
-/// A token or a constant syntax node.
-struct ConstTokenOrSyntax : public TokenOrSyntaxBase<const SyntaxNode*> {
-    using TokenOrSyntaxBase::TokenOrSyntaxBase;
-
-    ConstTokenOrSyntax(TokenOrSyntax tos);
+    /// Gets access to the object as a syntax node (throwing an exception
+    /// if it's not actually a syntax node).
+    SyntaxNode* node() const {
+        // const_cast is safe because we only could have constructed this
+        // object with a non-const pointer.
+        return const_cast<SyntaxNode*>(std::get<1>(*this));
+    }
 };
 
 /// Base class for all syntax nodes.
-class SyntaxNode {
+class SLANG_EXPORT SyntaxNode {
 public:
+    using Token = parsing::Token;
+
     /// The parent node of this syntax node. The root of the syntax
     /// tree does not have a parent (will be nullptr).
     SyntaxNode* parent = nullptr;
@@ -83,6 +85,10 @@ public:
     /// the given index is not a node (probably a token) then this returns null.
     const SyntaxNode* childNode(size_t index) const;
 
+    /// Gets the child syntax node at the specified index. If the child at
+    /// the given index is not a node (probably a token) then this returns null.
+    SyntaxNode* childNode(size_t index);
+
     /// Gets the child token at the specified index. If the child at
     /// the given index is not a token (probably a node) then this returns
     /// an empty Token.
@@ -90,6 +96,12 @@ public:
 
     /// Gets the number of (direct) children underneath this node in the tree.
     size_t getChildCount() const; // Note: implemented in AllSyntax.cpp
+
+    /// Returns true if this syntax node is "equivalent" to the other provided
+    /// syntax node. Equivalence here is determined by the entire subtrees having
+    /// the same kinds of syntax nodes in the same order and all leaf tokens
+    /// having the same kinds and value text.
+    bool isEquivalentTo(const SyntaxNode& other) const;
 
     /// Reinterprets this node as being of type T. In debug this will assert
     /// that the dynamic kind is appropriate for the specified static type.
@@ -105,6 +117,22 @@ public:
     const T& as() const {
         ASSERT(T::isKind(kind));
         return *static_cast<const T*>(this);
+    }
+
+    // Reinterprets this node as being of type T, if it is not belong type T, return nullptr
+    template<typename T>
+    T* as_if() {
+        if (!T::isKind(kind))
+            return nullptr;
+        return static_cast<T*>(this);
+    }
+
+    // Reinterprets this node as being of type T, if it is not belong type T, return nullptr
+    template<typename T>
+    const T* as_if() const {
+        if (!T::isKind(kind))
+            return nullptr;
+        return static_cast<const T*>(this);
     }
 
     /// Applies a visitor object to this node by dispatching based on the
@@ -127,10 +155,51 @@ protected:
 
 private:
     ConstTokenOrSyntax getChild(size_t index) const;
+    TokenOrSyntax getChild(size_t index);
+};
+
+SLANG_EXPORT SyntaxNode* clone(const SyntaxNode&, BumpAllocator&);
+SLANG_EXPORT SyntaxNode* deepClone(const SyntaxNode&, BumpAllocator&);
+
+template<typename T, typename = std::enable_if_t<std::is_base_of_v<SyntaxNode, T>>>
+T* clone(const T& node, BumpAllocator& alloc) {
+    return static_cast<T*>(clone(static_cast<const SyntaxNode&>(node), alloc));
+}
+
+template<typename T, typename = std::enable_if_t<std::is_base_of_v<SyntaxNode, T>>>
+T* deepClone(const T& node, BumpAllocator& alloc) {
+    return static_cast<T*>(deepClone(static_cast<const SyntaxNode&>(node), alloc));
+}
+
+/// Represents a source range or a way to get one by materializing
+/// it from a syntax node. This exists to avoid computing the source
+/// range of a node unless it's actually needed.
+class DeferredSourceRange {
+public:
+    DeferredSourceRange(SourceRange range) : range(range), node(nullptr, true) {}
+    DeferredSourceRange(const SyntaxNode& node) : node(&node, false) {}
+    DeferredSourceRange(const SyntaxNode& node, SourceRange range) :
+        range(range), node(&node, true) {}
+
+    SourceRange get() const {
+        if (!node.getInt()) {
+            auto ptr = node.getPointer();
+            ASSERT(ptr);
+            range = ptr->sourceRange();
+            node.setInt(true);
+        }
+        return range;
+    }
+
+    const SyntaxNode* syntax() const { return node.getPointer(); }
+
+private:
+    mutable SourceRange range;
+    mutable PointerIntPair<const SyntaxNode*, 1, 1, bool> node;
 };
 
 /// A base class for syntax nodes that represent a list of items.
-class SyntaxListBase : public SyntaxNode {
+class SLANG_EXPORT SyntaxListBase : public SyntaxNode {
 public:
     /// Gets the number of child items in the node.
     size_t getChildCount() const { return childCount; }
@@ -161,12 +230,13 @@ protected:
 
 /// A syntax node that represents a list of child syntax nodes.
 template<typename T>
-class SyntaxList : public SyntaxListBase, public span<T*> {
+class SLANG_EXPORT SyntaxList : public SyntaxListBase, public span<T*> {
 public:
     SyntaxList(nullptr_t) : SyntaxList(span<T*>()) {}
-    SyntaxList(span<T*> elements);
+    SyntaxList(span<T*> elements) :
+        SyntaxListBase(SyntaxKind::SyntaxList, elements.size()), span<T*>(elements) {}
 
-    // TODO: this is here to work around a bug in GCC 8
+    // TODO: this is here to work around a bug in GCC 9
     operator span<const T* const>() const {
         return span<const T* const>(this->data(), this->size());
     }
@@ -184,20 +254,30 @@ private:
     }
 
     void resetAll(BumpAllocator& alloc, span<const TokenOrSyntax> children) final {
-        SmallVectorSized<T*, 8> buffer(children.size());
+        SmallVector<T*> buffer(children.size(), UninitializedTag());
         for (auto& t : children)
-            buffer.append(&t.node()->as<T>());
+            buffer.push_back(&t.node()->as<T>());
 
         *this = buffer.copy(alloc);
         childCount = buffer.size();
     }
 };
 
+template<typename T>
+SyntaxList<T>* deepClone(const SyntaxList<T>& node, BumpAllocator& alloc) {
+    SmallVector<T*> buffer(node.size(), UninitializedTag());
+    for (auto& t : node)
+        buffer.push_back(deepClone(*t, alloc));
+
+    return alloc.emplace<SyntaxList<T>>(buffer.copy(alloc));
+}
+
 /// A syntax node that represents a list of child tokens.
-class TokenList : public SyntaxListBase, public span<Token> {
+class SLANG_EXPORT TokenList : public SyntaxListBase, public span<parsing::Token> {
 public:
     TokenList(nullptr_t) : TokenList(span<Token>()) {}
-    TokenList(span<Token> elements);
+    TokenList(span<Token> elements) :
+        SyntaxListBase(SyntaxKind::TokenList, elements.size()), span<Token>(elements) {}
 
 private:
     TokenOrSyntax getChild(size_t index) final { return (*this)[index]; }
@@ -209,9 +289,9 @@ private:
     }
 
     void resetAll(BumpAllocator& alloc, span<const TokenOrSyntax> children) final {
-        SmallVectorSized<Token, 8> buffer(children.size());
+        SmallVector<Token> buffer(children.size(), UninitializedTag());
         for (auto& t : children)
-            buffer.append(t.token());
+            buffer.push_back(t.token());
 
         *this = buffer.copy(alloc);
         childCount = buffer.size();
@@ -221,7 +301,7 @@ private:
 /// A syntax node that represents a token-separated list of child syntax nodes.
 /// The stored children are assumed to alternate between delimiters (such as a comma) and nodes.
 template<typename T>
-class SeparatedSyntaxList : public SyntaxListBase {
+class SLANG_EXPORT SeparatedSyntaxList : public SyntaxListBase {
 public:
     /// An iterator that will iterate over just the nodes (and skip the delimiters) in the
     /// parent SeparatedSyntaxList.
@@ -231,15 +311,18 @@ public:
     public:
         using ParentList = std::conditional_t<std::is_const_v<std::remove_pointer_t<U>>,
                                               const SeparatedSyntaxList, SeparatedSyntaxList>;
-        iterator_base(ParentList& list, size_t index) : list(list), index(index) {}
+        iterator_base(ParentList& list, size_t index) : list(&list), index(index) {}
+        iterator_base(const iterator_base& other) = default;
+
+        iterator_base& operator=(const iterator_base& other) = default;
 
         bool operator==(const iterator_base& other) const {
-            return &list == &other.list && index == other.index;
+            return list == other.list && index == other.index;
         }
 
         bool operator<(const iterator_base& other) const { return index < other.index; }
 
-        U operator*() const { return list[index]; }
+        U operator*() const { return (*list)[index]; }
 
         size_t operator-(const iterator_base& other) const { return index - other.index; }
 
@@ -253,7 +336,7 @@ public:
         }
 
     private:
-        ParentList& list;
+        ParentList* list;
         size_t index;
     };
 
@@ -261,7 +344,16 @@ public:
     using const_iterator = iterator_base<const T*>;
 
     SeparatedSyntaxList(nullptr_t) : SeparatedSyntaxList(span<TokenOrSyntax>()) {}
-    SeparatedSyntaxList(span<TokenOrSyntax> elements);
+    SeparatedSyntaxList(span<TokenOrSyntax> elements) :
+        SyntaxListBase(SyntaxKind::SeparatedList, elements.size()), elements(elements) {}
+
+    /// @return the elements of nodes in the list
+    [[nodiscard]] span<const ConstTokenOrSyntax> elems() const {
+        return span<const ConstTokenOrSyntax>(elements.data(), elements.size());
+    }
+
+    /// @return the elements of nodes in the list
+    [[nodiscard]] span<TokenOrSyntax> elems() { return elements; }
 
     /// @return true if the list is empty, and false if it has elements.
     [[nodiscard]] bool empty() const { return elements.empty(); }
@@ -296,8 +388,8 @@ private:
     }
 
     void resetAll(BumpAllocator& alloc, span<const TokenOrSyntax> children) final {
-        SmallVectorSized<TokenOrSyntax, 8> buffer(children.size());
-        buffer.appendRange(children);
+        SmallVector<TokenOrSyntax> buffer(children.size(), UninitializedTag());
+        buffer.append(children);
 
         elements = buffer.copy(alloc);
         childCount = buffer.size();
@@ -307,17 +399,15 @@ private:
 };
 
 template<typename T>
-SyntaxList<T>::SyntaxList(span<T*> elements) :
-    SyntaxListBase(SyntaxKind::SyntaxList, elements.size()), span<T*>(elements) {
+SeparatedSyntaxList<T>* deepClone(const SeparatedSyntaxList<T>& node, BumpAllocator& alloc) {
+    SmallVector<TokenOrSyntax> buffer(node.size(), UninitializedTag());
+    for (const auto& ele : node.elems()) {
+        if (ele.isToken())
+            buffer.push_back(ele.token().deepClone(alloc));
+        else
+            buffer.push_back(static_cast<T*>(deepClone(*ele.node(), alloc)));
+    }
+    return alloc.emplace<SeparatedSyntaxList<T>>(buffer.copy(alloc));
 }
 
-inline TokenList::TokenList(span<Token> elements) :
-    SyntaxListBase(SyntaxKind::TokenList, elements.size()), span<Token>(elements) {
-}
-
-template<typename T>
-SeparatedSyntaxList<T>::SeparatedSyntaxList(span<TokenOrSyntax> elements) :
-    SyntaxListBase(SyntaxKind::SeparatedList, elements.size()), elements(elements) {
-}
-
-} // namespace slang
+} // namespace slang::syntax

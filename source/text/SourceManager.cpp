@@ -2,7 +2,8 @@
 // SourceManager.cpp
 // Source file management
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/text/SourceManager.h"
 
@@ -129,14 +130,14 @@ string_view SourceManager::getMacroName(SourceLocation location) const {
 }
 
 bool SourceManager::isFileLoc(SourceLocation location) const {
-    if (location == SourceLocation::NoLocation)
+    if (location.buffer() == SourceLocation::NoLocation.buffer())
         return false;
 
     return getFileInfo(location.buffer());
 }
 
 bool SourceManager::isMacroLoc(SourceLocation location) const {
-    if (location == SourceLocation::NoLocation)
+    if (location.buffer() == SourceLocation::NoLocation.buffer())
         return false;
 
     auto buffer = location.buffer();
@@ -412,11 +413,28 @@ void SourceManager::addDiagnosticDirective(SourceLocation location, string_view 
         // Keep the list in sorted order. Typically new additions should be at the end,
         // in which case we'll hit the condition above, but just in case we will do the
         // full search and insert here.
-        vec.emplace(
-            std::upper_bound(vec.begin(), vec.end(), offset,
-                             [](size_t offset, auto& diag) { return offset < diag.offset; }),
-            name, offset, severity);
+        vec.emplace(std::upper_bound(vec.begin(), vec.end(), offset,
+                                     [](size_t offset, auto& diag) {
+                                         return offset < diag.offset;
+                                     }),
+                    name, offset, severity);
     }
+}
+
+span<const SourceManager::DiagnosticDirectiveInfo> SourceManager::getDiagnosticDirectives(
+    BufferID buffer) const {
+    if (auto it = diagDirectives.find(buffer); it != diagDirectives.end())
+        return it->second;
+    return {};
+}
+
+std::vector<BufferID> SourceManager::getAllBuffers() const {
+    std::shared_lock lock(mut);
+    std::vector<BufferID> result;
+    for (size_t i = 1; i < bufferEntries.size(); i++)
+        result.push_back(BufferID((uint32_t)i, ""sv));
+
+    return result;
 }
 
 SourceManager::FileInfo* SourceManager::getFileInfo(BufferID buffer) {
@@ -443,15 +461,21 @@ SourceBuffer SourceManager::createBufferEntry(FileData* fd, SourceLocation inclu
                                               std::unique_lock<std::shared_mutex>&) {
     ASSERT(fd);
     bufferEntries.emplace_back(FileInfo(fd, includedFrom));
-    return SourceBuffer{ string_view(fd->mem.data(), fd->mem.size()),
-                         BufferID((uint32_t)(bufferEntries.size() - 1), fd->name) };
+    return SourceBuffer{string_view(fd->mem.data(), fd->mem.size()),
+                        BufferID((uint32_t)(bufferEntries.size() - 1), fd->name)};
 }
 
 bool SourceManager::isCached(const fs::path& path) const {
-    std::error_code ec;
-    fs::path absPath = fs::weakly_canonical(path, ec);
-    if (ec)
-        return false;
+    fs::path absPath;
+    if (!disableProximatePaths) {
+        std::error_code ec;
+        absPath = fs::weakly_canonical(path, ec);
+        if (ec)
+            return false;
+    }
+    else {
+        absPath = path;
+    }
 
     std::shared_lock lock(mut);
     auto it = lookupCache.find(absPath.u8string());
@@ -459,10 +483,16 @@ bool SourceManager::isCached(const fs::path& path) const {
 }
 
 SourceBuffer SourceManager::openCached(const fs::path& fullPath, SourceLocation includedFrom) {
-    std::error_code ec;
-    fs::path absPath = fs::weakly_canonical(fullPath, ec);
-    if (ec)
-        return SourceBuffer();
+    fs::path absPath;
+    if (!disableProximatePaths) {
+        std::error_code ec;
+        absPath = fs::weakly_canonical(fullPath, ec);
+        if (ec)
+            return SourceBuffer();
+    }
+    else {
+        absPath = fullPath;
+    }
 
     // first see if we have this file cached
     {

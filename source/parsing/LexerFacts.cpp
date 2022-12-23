@@ -2,13 +2,16 @@
 // LexerFacts.cpp
 // Random lexer-related utility functions
 //
-// File is under the MIT license; see LICENSE for details
+// SPDX-FileCopyrightText: Michael Popoloski
+// SPDX-License-Identifier: MIT
 //------------------------------------------------------------------------------
 #include "slang/parsing/LexerFacts.h"
 
 #include "slang/syntax/SyntaxNode.h"
 
-namespace slang {
+namespace slang::parsing {
+
+using namespace syntax;
 
 // clang-format off
 const static StringTable<TokenKind> systemIdentifierKeywords = {
@@ -638,7 +641,7 @@ KeywordVersion LexerFacts::getDefaultKeywordVersion() {
     return KeywordVersion::v1800_2017;
 }
 
-optional<KeywordVersion> LexerFacts::getKeywordVersion(string_view text) {
+std::optional<KeywordVersion> LexerFacts::getKeywordVersion(string_view text) {
     KeywordVersion version;
     if (keywordVersionTable.lookup(text, version))
         return version;
@@ -1027,4 +1030,4 @@ string_view LexerFacts::getTokenKindText(TokenKind kind) {
 }
 // clang-format on
 
-} // namespace slang
+} // namespace slang::parsing
