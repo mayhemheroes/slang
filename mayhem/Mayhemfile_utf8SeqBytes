@@ -1,0 +1,6 @@
+project: slang
+target: uft8seqbytes
+
+cmds:
+  - cmd: /fuzz_utf8SeqBytes
+    libfuzzer: true

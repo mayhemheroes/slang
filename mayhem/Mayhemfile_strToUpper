@@ -1,0 +1,6 @@
+project: slang
+target: strtoupper
+
+cmds:
+  - cmd: /fuzz_strToUpper
+    libfuzzer: true

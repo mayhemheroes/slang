@@ -1,0 +1,5 @@
+project: slang
+target: slang
+
+cmds:
+  - cmd: /install/bin/slang @@
