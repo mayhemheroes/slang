@@ -143,6 +143,10 @@ struct SLANG_EXPORT CompilationOptions {
     /// that have interface ports will cause an error if this is not set.
     bool scriptMode = true;
 
+    /// The default time scale to use for design elements that don't specify
+    /// one explicitly.
+    std::optional<TimeScale> defaultTimeScale;
+
     /// If non-empty, specifies the list of modules that should serve as the
     /// top modules in the design. If empty, this will be automatically determined
     /// based on which modules are unreferenced elsewhere.
@@ -160,7 +164,11 @@ struct SLANG_EXPORT CompilationOptions {
 /// specified overrides.
 struct HierarchyOverrideNode {
     /// A map of parameters in the current scope to override.
-    flat_hash_map<const syntax::SyntaxNode*, ConstantValue> overrides;
+    /// The key is the syntax node representing the parameter and the value is a pair,
+    /// the first element of which is the value to set the parameter to and the second
+    /// is the source defparam doing the overriding, if any (can be null).
+    flat_hash_map<const syntax::SyntaxNode*, std::pair<ConstantValue, const syntax::SyntaxNode*>>
+        overrides;
 
     /// A map of child scopes that also contain overrides.
     flat_hash_map<InstancePath::Entry, HierarchyOverrideNode> childNodes;
@@ -406,11 +414,8 @@ public:
     /// Adds a set of diagnostics to the compilation's list of semantic diagnostics.
     void addDiagnostics(const Diagnostics& diagnostics);
 
-    /// Sets the default time scale to use when none is specified in the source code.
-    void setDefaultTimeScale(TimeScale timeScale) { defaultTimeScale = timeScale; }
-
     /// Gets the default time scale to use when none is specified in the source code.
-    TimeScale getDefaultTimeScale() const { return defaultTimeScale; }
+    std::optional<TimeScale> getDefaultTimeScale() const { return options.defaultTimeScale; }
 
     const Type& getType(syntax::SyntaxKind kind) const;
     const Type& getType(const syntax::DataTypeSyntax& node, const ASTContext& context,
@@ -497,6 +502,7 @@ private:
     void checkExternIfaceMethods(span<const MethodPrototypeSymbol* const> protos);
     void checkModportExports(
         span<const std::pair<const InterfacePortSymbol*, const ModportSymbol*>> modports);
+    void checkElemTimeScale(std::optional<TimeScale> timeScale, SourceRange sourceRange);
     void resolveDefParamsAndBinds();
     void resolveBindTargets(const syntax::BindDirectiveSyntax& syntax, const Scope& scope,
                             SmallVector<const Symbol*>& instTargets, const Definition** defTarget);
@@ -613,9 +619,9 @@ private:
     std::unique_ptr<RootSymbol> root;
     const SourceManager* sourceManager = nullptr;
     size_t numErrors = 0; // total number of errors inserted into the diagMap
-    TimeScale defaultTimeScale;
     bool finalized = false;
     bool finalizing = false; // to prevent reentrant calls to getRoot()
+    bool anyElemsWithTimescales = false;
     uint32_t typoCorrections = 0;
     int nextEnumSystemId = 1;
     int nextStructSystemId = 1;

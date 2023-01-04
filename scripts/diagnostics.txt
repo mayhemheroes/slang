@@ -77,6 +77,7 @@ error UnrecognizedKeywordVersion "unsupported keyword version specified for `beg
 error MismatchedEndKeywordsDirective "no opening `begin_keywords directive"
 error InvalidTimeScaleSpecifier "time scale must have a value of 1, 10, or 100"
 error InvalidTimeScalePrecision "time precision must be at least as precise as the time unit (i.e. it cannot be a longer unit of time)"
+error InvalidInferredTimeScale "invalid inferred time scale of {} for scope; time precision must be at least as precise as the time unit (i.e. it cannot be a longer unit of time)"
 error RecursiveMacro "expansion of macro '{}' is recursive"
 error MacroOpsOutsideDefinition "macro operators may only be used within a macro definition"
 error SplitBlockCommentInDirective "block comments on the same line as a directive must also be terminated on that line"
@@ -457,6 +458,7 @@ error StaticAssert "static assertion failed{}"
 warning warning-task WarningTask "$warning encountered{}"
 note InfoTask "$info encountered{}"
 note NoteComparisonReduces "comparison reduces to ({} {} {})"
+note NoteCommonAncestor "common ancestor here violates that constraint"
 warning explicit-static StaticInitializerMustBeExplicit "initializing a static variable in a procedural context requires an explicit 'static' keyword"
 warning case-gen-dup CaseGenerateDup "more than one case generate block matches the value {}"
 warning case-gen-none CaseGenerateNoBlock "no case generate expression matches the value {}"
@@ -948,6 +950,7 @@ error InvalidBindTarget "'{}' is not a valid bind target; only modules and inter
 error WrongBindTargetDef "bind target '{}' is not an instance of '{}'"
 error BindTypeParamNotFound "bind type parameter '{}' resolves to {} which cannot be found in source scope"
 error BindTypeParamMismatch "bind type parameter '{}' resolves to {} in source scope but {} in target scope"
+error MissingTimeScale "design element does not have a time scale defined but others in the design do"
 warning unused-def UnusedDefinition "{} definition is unused"
 warning unused-net UnusedNet "unused net '{}'"
 warning unused-implicit-net UnusedImplicitNet "implicit net '{}' is unused elsewhere"
@@ -965,6 +968,7 @@ warning unused-typedef UnusedTypedef "unused typedef '{}'"
 warning unused-genvar UnusedGenvar "unused genvar '{}'"
 warning unused-assertion-decl UnusedAssertionDecl "unused {} '{}'"
 warning missing-top NoTopModules "no top-level modules found in design"
+warning duplicate-defparam DuplicateDefparam "parameter already has a defparam override applied; ignoring this one"
 
 subsystem Meta
 error TooManyErrors "too many errors emitted, stopping now [--error-limit=]"
@@ -986,7 +990,7 @@ group default = { real-underflow real-overflow vector-overflow int-overflow unco
                   protect-arglist unknown-protect-encoding unknown-protect-option invalid-pragma-number
                   invalid-pragma-viewport duplicate-definition protect-encoding-bytes invalid-encoding-byte
                   raw-protect-eof protected-envelope specify-param dup-timing-path invalid-pulsestyle
-                  negative-timing-limit bad-procedural-force }
+                  negative-timing-limit bad-procedural-force duplicate-defparam }
 
 group extra = { empty-member empty-stmt dup-import pointless-void-cast case-gen-none case-gen-dup
                 unused-result format-real ignored-slice task-ignored width-trunc dup-attr event-const

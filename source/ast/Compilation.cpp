@@ -138,9 +138,6 @@ Compilation::Compilation(const Bag& options) :
     registerScalar(signedLogicType);
     registerScalar(signedRegType);
 
-    defaultTimeScale.base = {TimeUnit::Nanoseconds, TimeScaleMagnitude::One};
-    defaultTimeScale.precision = {TimeUnit::Nanoseconds, TimeScaleMagnitude::One};
-
     root = std::make_unique<RootSymbol>(*this);
 
     // Register all system tasks, functions, and methods.
@@ -371,7 +368,7 @@ const RootSymbol& Compilation::getRoot(bool skipDefParamsAndBinds) {
                     auto it = cliOverrides.find(param.name);
                     if (it != cliOverrides.end()) {
                         hierarchyOverrides.childNodes[def->syntax].overrides.emplace(
-                            param.valueDecl, *it->second);
+                            param.valueDecl, std::pair{*it->second, nullptr});
                     }
                 }
             }
@@ -490,6 +487,8 @@ void Compilation::createDefinition(const Scope& scope, LookupLocation location,
         topDefinitions[def->name].first = def;
         if (auto primIt = udpMap.find(def->name); primIt != udpMap.end())
             reportRedefinition(scope, *def, *primIt->second);
+
+        checkElemTimeScale(def->timeScale, syntax.header->name.range());
     }
     else {
         // Record the fact that we have nested modules with this given name.
@@ -516,6 +515,8 @@ const PackageSymbol& Compilation::createPackage(const Scope& scope,
         diag << package.name;
         diag.addNote(diag::NotePreviousDefinition, it->second->location);
     }
+
+    checkElemTimeScale(package.timeScale, syntax.header->name.range());
 
     return package;
 }
@@ -1435,6 +1436,27 @@ void Compilation::checkModportExports(
     }
 }
 
+void Compilation::checkElemTimeScale(std::optional<TimeScale> timeScale, SourceRange sourceRange) {
+    if (timeScale) {
+        if (anyElemsWithTimescales)
+            return;
+
+        anyElemsWithTimescales = true;
+        for (auto& def : definitionMemory)
+            checkElemTimeScale(def->timeScale, def->syntax.header->name.range());
+
+        for (auto [name, package] : packageMap) {
+            if (auto syntax = package->getSyntax()) {
+                checkElemTimeScale(package->timeScale,
+                                   syntax->as<ModuleDeclarationSyntax>().header->name.range());
+            }
+        }
+    }
+    else if (anyElemsWithTimescales) {
+        root->addDiag(diag::MissingTimeScale, sourceRange);
+    }
+}
+
 void Compilation::resolveBindTargets(const BindDirectiveSyntax& syntax, const Scope& scope,
                                      SmallVector<const Symbol*>& instTargets,
                                      const Definition** defTarget) {
@@ -1572,7 +1594,8 @@ void Compilation::resolveDefParamsAndBinds() {
 
     struct OverrideEntry {
         InstancePath path;
-        const SyntaxNode* syntax = nullptr;
+        const SyntaxNode* targetSyntax = nullptr;
+        const SyntaxNode* defparamSyntax = nullptr;
         ConstantValue value;
         std::string pathStr; // TODO: should be able to avoid storing the stringified path here
     };
@@ -1592,10 +1615,23 @@ void Compilation::resolveDefParamsAndBinds() {
         return node;
     };
 
-    auto copyStateInto = [&](Compilation& c) {
+    auto copyStateInto = [&](Compilation& c, bool isFinal) {
         for (auto& entry : overrides) {
+            if (!entry.targetSyntax)
+                continue;
+
+            ASSERT(entry.defparamSyntax);
+
             auto node = getNodeFor(entry.path, c);
-            node->overrides[entry.syntax] = entry.value;
+            auto [it, inserted] = node->overrides.emplace(
+                entry.targetSyntax, std::pair{entry.value, entry.defparamSyntax});
+
+            if (!inserted && isFinal) {
+                ASSERT(it->second.second);
+                auto& diag = c.root->addDiag(diag::DuplicateDefparam,
+                                             entry.defparamSyntax->sourceRange());
+                diag.addNote(diag::NotePreviousDefinition, it->second.second->sourceRange());
+            }
         }
 
         for (auto& entry : binds) {
@@ -1616,7 +1652,7 @@ void Compilation::resolveDefParamsAndBinds() {
         for (auto& tree : syntaxTrees)
             c.addSyntaxTree(tree);
 
-        copyStateInto(c);
+        copyStateInto(c, false);
     };
 
     auto saveState = [&](DefParamVisitor& visitor, Compilation& c) {
@@ -1631,7 +1667,7 @@ void Compilation::resolveDefParamsAndBinds() {
                 target->getHierarchicalPath(path);
 
                 overrides.push_back({InstancePath(*target), target->getSyntax(),
-                                     defparam->getValue(), std::move(path)});
+                                     defparam->getSyntax(), defparam->getValue(), std::move(path)});
             }
         }
 
@@ -1722,7 +1758,7 @@ void Compilation::resolveDefParamsAndBinds() {
                 };
 
                 auto& prevEntry = overrides[j];
-                if (prevEntry.syntax && targetNode && prevEntry.syntax != targetNode) {
+                if (prevEntry.targetSyntax && targetNode && prevEntry.targetSyntax != targetNode) {
                     std::string path;
                     target->getHierarchicalPath(path);
 
@@ -1759,7 +1795,7 @@ void Compilation::resolveDefParamsAndBinds() {
     }
 
     // We have our final overrides; copy them into the main compilation unit.
-    copyStateInto(*this);
+    copyStateInto(*this, true);
 }
 
 } // namespace slang::ast
